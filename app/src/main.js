@@ -25,7 +25,6 @@ const photoInput = document.getElementById('photo');
 const captionInput = document.getElementById('caption');
 const kickerInput = document.getElementById('kicker');
 const subtitleInput = document.getElementById('subtitle');
-const suffixInput = document.getElementById('suffix');
 const layoutRow = document.getElementById('layouts');
 const gradeRow = document.getElementById('grades');
 const sizeRow = document.getElementById('sizes');
@@ -387,11 +386,9 @@ function setCaption(fields = {}) {
   if (fields.title !== undefined) state.caption.title = fields.title;
   if (fields.kicker !== undefined) state.caption.kicker = fields.kicker;
   if (fields.subtitle !== undefined) state.caption.subtitle = fields.subtitle;
-  if (fields.suffix !== undefined) state.caption.suffix = fields.suffix;
   set(captionInput, fields.title);
   set(kickerInput, fields.kicker);
   set(subtitleInput, fields.subtitle);
-  set(suffixInput, fields.suffix);
 }
 
 /** A filename-safe version of the title. */
@@ -491,7 +488,6 @@ const bindText = (input, key) => {
 bindText(captionInput, 'title');
 bindText(kickerInput, 'kicker');
 bindText(subtitleInput, 'subtitle');
-bindText(suffixInput, 'suffix');
 
 /** Reads the custom size fields and applies them if they are sane. */
 function applyCustomSize() {

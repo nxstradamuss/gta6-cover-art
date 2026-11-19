@@ -10,7 +10,6 @@ export const DEFAULT_CAPTION = {
   title: 'Sunset Heist',
   subtitle: 'Coming Soon',
   kicker: 'A Neon Crime Saga',
-  suffix: 'II',
 };
 
 export const DEFAULT_SIZE = { w: 1080, h: 1080 };

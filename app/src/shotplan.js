@@ -3,11 +3,13 @@
 //
 // The photographs are dealt so that every supplied photo appears once before any of them comes round again, and
 // the hero panel (the biggest, and in `vice` the tallest) takes the first photo, which the caller supplies as the
-// strongest one. One photo must never simply repeat across the panels: when a photograph does come round a second
-// time it is given a different shot — a wide of the whole scene, a hero of the face with headroom, a close crop at
-// the brow, a detail low on the body, a low angle with air beneath the subject — at a clearly different
-// magnification, centred on a different part of the frame, and mirrored, so two panels of the same person never
-// read as the same crop twice.
+// strongest one. Once the whole list has been used the deal starts again from the first photo, so the extra
+// panels come back to the hero photograph before they reach for anyone else and the cast stays tight — the
+// strongest photo carries the most panels. One photo must never simply repeat across the panels: when a
+// photograph does come round a second time it is given a different shot — a wide of the whole scene, a hero of
+// the face with headroom, a close crop at the brow, a detail low on the body, a low angle with air beneath the
+// subject — at a clearly different magnification, centred on a different part of the frame, and mirrored, so two
+// panels of the same person never read as the same crop twice.
 //
 // Colour is planned as one story, not five: the hero photograph's own dominant hue picks the key grade, and each
 // panel is dealt a member of that grade's narrow family — grades inside 45 degrees of the key's accent, or the key
@@ -90,6 +92,18 @@ function touching(a, b) {
   return (gapX <= 18 && overlapY > 0) || (gapY <= 18 && overlapX > 0);
 }
 
+/**
+ * The photograph a slot shows. The deal walks the panel order — the hero first, then the rest in reading order —
+ * and hands out the supplied photographs in the order they were supplied, starting over at the first one when the
+ * list runs out. Every photo therefore appears once before any of them is reused, and the extras come back to the
+ * strongest photo (the one supplied first) before they reach for the second, so the cast stays tight rather than
+ * growing one more stranger per panel. A reuse is re-framed and mirrored further down, never repeated as a crop.
+ */
+function photoForSlot(slot, photoCount) {
+  if (!photoCount) return -1;
+  return slot % photoCount;
+}
+
 /** For every panel, the indices of the panels it touches. */
 export function panelNeighbours(rects) {
   return rects.map((rect, index) => rects
@@ -163,7 +177,7 @@ export function planPanels(state) {
   for (let slot = 0; slot < count; slot += 1) {
     const index = order[slot];
     const isHero = index === heroIndex;
-    const photoIndex = photoCount ? slot % photoCount : -1;
+    const photoIndex = photoForSlot(slot, photoCount);
     const subject = photoCount ? subjectOf(state, photoIndex) : { x: 0.5, y: 0.42 };
 
     let history = null;

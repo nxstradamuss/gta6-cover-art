@@ -1,11 +1,13 @@
 // Draws the whole cover: the panel collage — each panel its own shot, cropped to its own focus, mirrored when the
 // plan asks for it and graded in the cover's key grade at its own tone — the dark gutters between the prints, the
 // lettered title band that borrows its colour from the collage, and one last wash of the key accent, light leak,
-// vignette and grain over everything so the collage reads as a single piece of art.
+// vignette and grain over everything so the collage reads as a single piece of art. A final exposure pass then
+// lifts any panel that graded far darker than the rest toward the composition's median, so the grid has no hole.
 
 import { hueOfRgb, mixColours, setAlpha } from './colour.js';
 import { applyGrade } from './grades.js';
 import { cropFrame } from './crop.js';
+import { levelPanels } from './exposure.js';
 import { drawTitle, drawTrackedText, fitBandTitle, fitTrackedText, measureTracked, measureWordmark, TITLE_TRACKING } from './lettering.js';
 import { getLayout } from './layouts.js';
 import { panelLayer } from './panelcache.js';
@@ -314,20 +316,19 @@ function drawTitleBand(ctx, state, geo, w, h, canvas, floating = false) {
   // costly part of the band — a few hundred glyph rasterisations — so it is painted once into a bitmap and
   // blitted after that, which keeps a drag or a reshuffle off the type.
   const titleText = (state.caption.title || 'Untitled').trim();
-  const suffix = (state.caption.suffix || 'II').trim();
   const maxWidth = w - margin * 2;
-  const fitted = fitBandTitle(ctx, titleText, maxWidth, available, suffix);
+  const fitted = fitBandTitle(ctx, titleText, maxWidth, available);
   const lineHeight = 0.94;
   const blockHeight = fitted.size * lineHeight * fitted.lines.length;
   const size = blockHeight > available ? fitted.size * (available / blockHeight) : fitted.size;
   const titleCentre = (titleTop + titleBottom) / 2 + size * 0.02;
-  const blockWidth = fitted.lines.reduce((widest, line, index) => Math.max(
+  const blockWidth = fitted.lines.reduce((widest, line) => Math.max(
     widest,
-    measureWordmark(ctx, line, size, index === fitted.lines.length - 1 ? suffix : '', TITLE_TRACKING, fitted.condense).width,
+    measureWordmark(ctx, line, size, TITLE_TRACKING, fitted.condense).width,
   ), 0);
 
   const wordmarkKey = [
-    titleText, size, fitted.condense, lineHeight, suffix,
+    titleText, size, fitted.condense, lineHeight,
     palette.top, palette.mid, palette.bottom, palette.outline, grade.glow,
     fitted.lines.join(' / '),
   ].join('|');
@@ -341,7 +342,6 @@ function drawTitleBand(ctx, state, geo, w, h, canvas, floating = false) {
       condense: fitted.condense,
       palette,
       glow: grade.glow,
-      suffix,
     });
   });
   ctx.drawImage(wordmark, Math.round(w / 2 - wordmark.width / 2), Math.round(titleCentre - wordmark.height / 2));
@@ -517,7 +517,12 @@ export function drawCover(canvas, state) {
   drawFrameTreatment(ctx, state, w, h, primaryGrade(state).accent);
   flush();
   const t3 = performance.now();
-  drawCover.timing = { panels: t1 - t0, band: t2 - t1, frame: t3 - t2 };
+  // Last of all, the panels are evened out: a plate that graded far darker than the rest is lifted toward the
+  // composition's median, so the grid has no hole in it. Only luminance moves; the hue family is left alone.
+  drawCover.exposure = levelPanels(ctx, canvas, geo.panels);
+  flush();
+  const t4 = performance.now();
+  drawCover.timing = { panels: t1 - t0, band: t2 - t1, frame: t3 - t2, exposure: t4 - t3 };
 
   ctx.restore();
   return canvas;

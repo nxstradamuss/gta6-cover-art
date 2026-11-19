@@ -1,7 +1,7 @@
 [
   {
     "name": "1-cover.jpg",
-    "query": "?shot=cover&photos=boulevard,braids,crown,smoke&caption=Boulevard%20Queen&kicker=A%20Neon%20Crime%20Saga&subtitle=This%20Fall&layout=vice&size=1920x1080",
+    "query": "?shot=cover&photos=boulevard,crown,smoke&caption=Boulevard%20Queen&kicker=A%20Neon%20Crime%20Saga&subtitle=This%20Fall&layout=vice&size=1920x1080",
     "w": 1280,
     "h": 720
   },

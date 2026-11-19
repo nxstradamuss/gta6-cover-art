@@ -4,8 +4,8 @@
 // edge and a hot bottom edge. The fill is built in a glyph mask so the highlights are clipped to the letters
 // themselves rather than to a rectangle around them.
 //
-// No game font is used or shipped. The face is a system stack squeezed into a condensed cut, with a small numeral
-// set beside the word the way a game logo carries a version.
+// No game font is used or shipped. The face is a system stack squeezed into a condensed cut, set as one run of
+// capitals: the title is exactly the caption text, with no numeral or suffix tacked on beside it.
 
 export const TITLE_STACK = "'Impact', 'Haettenschweiler', 'Arial Narrow Bold', 'Arial Black', sans-serif";
 export const BODY_STACK = "'Helvetica Neue', Helvetica, Arial, 'DejaVu Sans', sans-serif";
@@ -18,8 +18,6 @@ export const TITLE_CONDENSE = 0.72;
 export const TITLE_LEAN = 8;
 
 const LEAN_SHEAR = Math.tan((TITLE_LEAN * Math.PI) / 180);
-const SUFFIX_SCALE = 0.38;
-const SUFFIX_GAP = 0.13;
 
 const DEFAULT_PALETTE = { top: '#fff6da', mid: '#ffc247', bottom: '#ff8f1f', outline: '#2b0710' };
 
@@ -60,24 +58,11 @@ export function measureLine(ctx, text, size, tracking = TITLE_TRACKING) {
   return { chars, widths, width: total };
 }
 
-/** The width the suffix numeral takes, and the gap before it. */
-function suffixWidth(ctx, suffix, size) {
-  if (!suffix) return { width: 0, gap: 0 };
-  ctx.save();
-  ctx.font = titleFont(size * SUFFIX_SCALE, 500);
-  const chars = Array.from(String(suffix).toUpperCase());
-  const width = chars.reduce((sum, ch) => sum + ctx.measureText(ch).width, 0)
-    + size * SUFFIX_SCALE * 0.06 * Math.max(0, chars.length - 1);
-  ctx.restore();
-  return { width, gap: size * SUFFIX_GAP };
-}
-
-/** The whole wordmark's width in canvas pixels: the condensed word, the gap, then the suffix. */
-export function measureWordmark(ctx, text, size, suffix = '', tracking = TITLE_TRACKING, condense = TITLE_CONDENSE) {
+/** The whole wordmark's width in canvas pixels: the condensed run of the line, and nothing after it. */
+export function measureWordmark(ctx, text, size, tracking = TITLE_TRACKING, condense = TITLE_CONDENSE) {
   const line = measureLine(ctx, text, size, tracking);
-  const tail = suffixWidth(ctx, suffix, size);
   const run = line.width * condense;
-  return { run, suffix: tail.width * condense, gap: tail.gap * condense, width: run + tail.gap * condense + tail.width * condense };
+  return { run, width: run };
 }
 
 /** How far the face may be squeezed to fill the band, and how wide it may be set before it stops being condensed. */
@@ -90,9 +75,9 @@ const LINE_HEIGHT = 0.94;
  * Fits one line to the band: the size comes from the height, then the horizontal squeeze is chosen so the word
  * reaches across the band. Only when even the tightest squeeze would overflow does the size come down.
  */
-function fitLine(ctx, text, maxWidth, maxHeight, suffix, tracking) {
+function fitLine(ctx, text, maxWidth, maxHeight, tracking) {
   const byHeight = Math.max(8, maxHeight / LINE_HEIGHT);
-  const natural = Math.max(1, measureWordmark(ctx, text, byHeight, suffix, tracking, 1).width);
+  const natural = Math.max(1, measureWordmark(ctx, text, byHeight, tracking, 1).width);
   let condense = maxWidth / natural;
   let size = byHeight;
   if (condense < MIN_CONDENSE) {
@@ -110,7 +95,7 @@ function wrapTitle(ctx, text, maxWidth, size) {
   let line = '';
   for (const word of words) {
     const next = line ? `${line} ${word}` : word;
-    if (line && measureWordmark(ctx, next, size, '', TITLE_TRACKING, MIN_CONDENSE).width > maxWidth) {
+    if (line && measureWordmark(ctx, next, size, TITLE_TRACKING, MIN_CONDENSE).width > maxWidth) {
       lines.push(line);
       line = word;
     } else {
@@ -121,24 +106,39 @@ function wrapTitle(ctx, text, maxWidth, size) {
   return lines.map((entry) => entry.toUpperCase());
 }
 
+/** The most lines the band will ever break a caption into. Past this the type stops being a wordmark. */
+const MAX_TITLE_LINES = 4;
+
 /**
- * The wordmark's fit for the band: one line if it can stay big, two if it cannot, with the squeeze chosen so the
- * type reaches the margins. Returns the size, the squeeze and the lines. Never overflows the band.
+ * The wordmark's fit for the band: one line if it can stay big, otherwise the fewest lines that let the type
+ * stay large, with the squeeze chosen so each line reaches the margins. Returns the size, the squeeze and the
+ * lines. Never overflows the band, and the whole of the caption is set — nothing is added beside it.
  */
-export function fitBandTitle(ctx, text, maxWidth, maxHeight, suffix = '', tracking = TITLE_TRACKING) {
-  const one = fitLine(ctx, text, maxWidth, maxHeight, suffix, tracking);
+export function fitBandTitle(ctx, text, maxWidth, maxHeight, tracking = TITLE_TRACKING) {
+  const one = fitLine(ctx, text, maxWidth, maxHeight, tracking);
   if (one.size >= (maxHeight / LINE_HEIGHT) * 0.55) {
     return { ...one, lines: [String(text ?? '').toUpperCase()] };
   }
-  const lines = wrapTitle(ctx, text, maxWidth, one.size);
-  let size = Number.POSITIVE_INFINITY;
-  let condense = MAX_CONDENSE;
-  lines.forEach((line, index) => {
-    const fit = fitLine(ctx, line, maxWidth, maxHeight / lines.length, index === lines.length - 1 ? suffix : '', tracking);
-    size = Math.min(size, fit.size);
-    condense = Math.min(condense, fit.condense);
-  });
-  return { size: Math.max(8, Math.floor(size)), condense, lines };
+
+  // Too long for one line at a readable size. Try the band broken into two lines, then three, then four: the
+  // first count the caption actually wraps into wins, so the type stays as large as the band allows rather than
+  // shrinking to whatever a single line would cost.
+  const words = String(text ?? '').trim().split(/\s+/).filter(Boolean);
+  const most = Math.max(1, Math.min(MAX_TITLE_LINES, words.length));
+  for (let count = 2; count <= most; count += 1) {
+    const guess = (maxHeight / LINE_HEIGHT) / count;
+    const lines = wrapTitle(ctx, text, maxWidth, guess);
+    if (lines.length > count) continue;
+    let size = Number.POSITIVE_INFINITY;
+    let condense = MAX_CONDENSE;
+    for (const line of lines) {
+      const fit = fitLine(ctx, line, maxWidth, maxHeight / lines.length, tracking);
+      size = Math.min(size, fit.size);
+      condense = Math.min(condense, fit.condense);
+    }
+    return { size: Math.max(8, Math.floor(size)), condense, lines };
+  }
+  return { ...one, lines: [String(text ?? '').toUpperCase()] };
 }
 
 /** Runs a drawing callback once per glyph, at its x offset, with the tracking applied. */
@@ -245,61 +245,14 @@ function buildGlow(size, chars, widths, tracking, glow) {
   return { canvas, pad, baseline, width, height };
 }
 
-/** The small numeral beside the word: a lighter weight, raised, keylined so it belongs to the same mark. */
-function drawSuffix(ctx, suffix, x, size, palette) {
-  const suffixSize = size * SUFFIX_SCALE;
-  const chars = Array.from(String(suffix).toUpperCase());
-  if (!chars.length) return 0;
-  const tracking = 0.06;
-
-  ctx.save();
-  ctx.font = titleFont(suffixSize, 500);
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'alphabetic';
-  ctx.lineJoin = 'round';
-  const widths = chars.map((ch) => ctx.measureText(ch).width);
-  const raise = size * 0.04;
-
-  const stroke = (colour, lineWidth, dy) => {
-    ctx.strokeStyle = colour;
-    ctx.lineWidth = lineWidth;
-    eachGlyph(chars, widths, suffixSize, tracking, (ch, gx) => ctx.strokeText(ch, x + gx, -raise + dy));
-  };
-  const fill = (style, dy) => {
-    ctx.fillStyle = style;
-    eachGlyph(chars, widths, suffixSize, tracking, (ch, gx) => ctx.fillText(ch, x + gx, -raise + dy));
-  };
-
-  // A hard shadow, then the dark keyline the main word wears, then cream, then a thin accent edge.
-  ctx.save();
-  ctx.shadowColor = 'rgba(6,2,8,0.85)';
-  ctx.shadowOffsetX = suffixSize * 0.1;
-  ctx.shadowOffsetY = suffixSize * 0.1;
-  ctx.shadowBlur = 0;
-  fill(palette.outline ?? DEFAULT_PALETTE.outline, 0);
-  ctx.restore();
-
-  stroke(palette.outline ?? DEFAULT_PALETTE.outline, suffixSize * 0.16, 0);
-  const metal = ctx.createLinearGradient(0, -suffixSize * 0.75, 0, suffixSize * 0.05);
-  metal.addColorStop(0, palette.top ?? DEFAULT_PALETTE.top);
-  metal.addColorStop(1, palette.mid ?? DEFAULT_PALETTE.mid);
-  fill(metal, 0);
-  stroke('rgba(255,255,255,0.35)', suffixSize * 0.04, 0);
-
-  ctx.restore();
-  return widths.reduce((sum, width) => sum + width, 0) + tracking * suffixSize * Math.max(0, chars.length - 1);
-}
-
 /**
  * Draws one line of the wordmark, centred on `centerX` with its baseline at `baseline`.
  * Returns the line's drawn width and height.
  */
 function drawWordmarkLine(ctx, text, centerX, baseline, size, options) {
-  const { tracking, condense, palette, glow, suffix } = options;
+  const { tracking, condense, palette, glow } = options;
   const { chars, widths, width } = measureLine(ctx, text, size, tracking);
-  const run = width * condense;
-  const tail = suffixWidth(ctx, suffix, size);
-  const totalWidth = run + tail.gap * condense + tail.width * condense;
+  const totalWidth = width * condense;
 
   ctx.save();
   ctx.translate(centerX - totalWidth / 2, baseline);
@@ -366,10 +319,6 @@ function drawWordmarkLine(ctx, text, centerX, baseline, size, options) {
     eachGlyph(chars, widths, size, tracking, (ch, x) => ctx.fillText(ch, x, 0));
   }
 
-  // The numeral, set smaller and raised beside the word, sharing the baseline and the lean. It is placed in the
-  // un-condensed glyph space the transform works in, so it lands right after the last letter.
-  if (suffix) drawSuffix(ctx, suffix, width + tail.gap, size, palette);
-
   ctx.restore();
   return { width: totalWidth, height: size };
 }
@@ -385,7 +334,6 @@ export function drawTitle(ctx, text, opts = {}) {
   const lineHeight = opts.lineHeight ?? 0.94;
   const palette = opts.palette ?? DEFAULT_PALETTE;
   const glow = opts.glow ?? 'rgba(255,120,40,0.55)';
-  const suffix = (opts.suffix ?? '').trim();
   const x = opts.x ?? 0;
   const y = opts.y ?? 0;
 
@@ -394,9 +342,9 @@ export function drawTitle(ctx, text, opts = {}) {
     .filter(Boolean);
   if (!lines.length) return { width: 0, height: 0, size, lines: [] };
 
-  const widest = lines.reduce((max, line, index) => Math.max(
+  const widest = lines.reduce((max, line) => Math.max(
     max,
-    measureWordmark(ctx, line, size, index === lines.length - 1 ? suffix : '', tracking, condense).width,
+    measureWordmark(ctx, line, size, tracking, condense).width,
   ), 0);
   const blockHeight = size * lineHeight * lines.length;
   const top = y - blockHeight / 2;
@@ -408,7 +356,6 @@ export function drawTitle(ctx, text, opts = {}) {
       condense,
       palette,
       glow,
-      suffix: index === lines.length - 1 ? suffix : '',
     });
   });
 

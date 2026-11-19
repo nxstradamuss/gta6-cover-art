@@ -1,6 +1,6 @@
 // Fixed scenes for screenshots: `?shot=cover` shows the cover alone, `?shot=editor` shows the whole page with the
 // photos loaded. The query also carries `photos` (a comma-separated list), `photo`, `caption`, `kicker`,
-// `subtitle`, `suffix`, `layout`, `grade`, `seed` and `size` (`size=1080x1350`). `window.__shotReady` is set only
+// `subtitle`, `layout`, `grade`, `seed` and `size` (`size=1080x1350`). `window.__shotReady` is set only
 // once the finished cover has actually been painted.
 
 /** Parses a `WxH` size string, returning null when it is not one. */
@@ -57,7 +57,6 @@ export async function runShot(shot, query, api) {
     title: query.get('caption') ?? undefined,
     kicker: query.get('kicker') ?? undefined,
     subtitle: query.get('subtitle') ?? undefined,
-    suffix: query.get('suffix') ?? undefined,
   });
 
   await api.loadPhotos(parsePhotos(query));
