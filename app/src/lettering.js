@@ -461,3 +461,20 @@ export function measureTracked(ctx, text, size, tracking = 0.24, weight = 600) {
   ctx.restore();
   return widths.reduce((sum, width) => sum + width, 0) + tracking * size * Math.max(0, chars.length - 1);
 }
+
+/** The smallest a line of small type is ever set: below this it stops being readable at a distance. */
+const MIN_BODY = 12;
+
+/**
+ * The size a tracked line should be set at: `size`, reduced a pixel at a time until the run fits `maxWidth`. Long
+ * kickers and subtitles therefore shorten themselves instead of running off the band, and nothing is ever set
+ * smaller than MIN_BODY.
+ */
+export function fitTrackedText(ctx, text, maxWidth, size, tracking = 0.24, weight = 600) {
+  if (!String(text ?? '').trim()) return Math.max(MIN_BODY, Math.round(size));
+  let fitted = Math.max(MIN_BODY, Math.round(size));
+  while (fitted > MIN_BODY && measureTracked(ctx, text, fitted, tracking, weight) > maxWidth) {
+    fitted -= 1;
+  }
+  return fitted;
+}

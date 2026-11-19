@@ -1,15 +1,16 @@
 // Draws the whole cover: the panel collage — each panel its own shot, cropped to its own focus, mirrored when the
-// plan asks for it and graded in its own colour — the dark gutters between the prints, the lettered title band that
-// borrows its colour from the collage, and one last warm cast, light leak, vignette and grain over everything so
-// the collage reads as a single piece of art.
+// plan asks for it and graded in the cover's key grade at its own tone — the dark gutters between the prints, the
+// lettered title band that borrows its colour from the collage, and one last wash of the key accent, light leak,
+// vignette and grain over everything so the collage reads as a single piece of art.
 
+import { hueOfRgb, mixColours, setAlpha } from './colour.js';
 import { applyGrade } from './grades.js';
 import { cropFrame } from './crop.js';
-import { drawTitle, drawTrackedText, fitBandTitle, measureTracked, measureWordmark, TITLE_TRACKING } from './lettering.js';
+import { drawTitle, drawTrackedText, fitBandTitle, fitTrackedText, measureTracked, measureWordmark, TITLE_TRACKING } from './lettering.js';
 import { getLayout } from './layouts.js';
 import { panelLayer } from './panelcache.js';
 import { planPanels } from './shotplan.js';
-import { makeRandom, panelGrade, primaryGrade } from './state.js';
+import { makeRandom, panelGrade, panelTone, primaryGrade } from './state.js';
 import { wordmarkLayer } from './wordmarkcache.js';
 
 const BASE = '#07050c';
@@ -71,10 +72,11 @@ function printEdge(ctx, w, h) {
 }
 
 /**
- * Paints one panel into its own bitmap: crop to the plan's shot, mirror it when the plan asks, grade it, then the
- * print's edges. The bitmap is cached, so a panel is only painted again when its shot, crop or grade changes.
+ * Paints one panel into its own bitmap: crop to the plan's shot, mirror it when the plan asks, grade it in the
+ * cover's key grade at this panel's tone, then the print's edges. The bitmap is cached, so a panel is only painted
+ * again when its shot, crop, grade or tone changes.
  */
-function paintPanel(ctx, rect, panel, grade, photo) {
+function paintPanel(ctx, rect, panel, grade, tone, photo) {
   let drawn = false;
   if (photo && photo.image) {
     const frame = cropFrame(photo.image, rect, panel);
@@ -95,7 +97,7 @@ function paintPanel(ctx, rect, panel, grade, photo) {
   }
   if (!drawn) drawEmptyPanel(ctx, rect, grade);
 
-  applyGrade(ctx, rect.w, rect.h, grade);
+  applyGrade(ctx, rect.w, rect.h, grade, tone);
 
   // The supporting panels sit a shade back, so the hero panel is where the eye lands first.
   if (!panel.hero) {
@@ -112,8 +114,9 @@ function drawPanels(ctx, state, geo) {
     const panel = state.panels[index];
     if (!panel) return;
     const grade = panelGrade(state, panel);
+    const tone = panelTone(state, panel);
     const photo = state.photos[panel.photoIndex];
-    const layer = panelLayer(panel, rect, grade, photo, (pctx) => paintPanel(pctx, rect, panel, grade, photo));
+    const layer = panelLayer(panel, rect, grade, tone, photo, (pctx) => paintPanel(pctx, rect, panel, grade, tone, photo));
     ctx.drawImage(layer, rect.x, rect.y);
   });
 }
@@ -134,19 +137,6 @@ function hairline(ctx, x0, x1, y, colour, thickness = 1) {
   if (x1 <= x0) return;
   ctx.fillStyle = colour;
   ctx.fillRect(x0, Math.round(y), Math.max(1, x1 - x0), Math.max(1, Math.round(thickness)));
-}
-
-/** The hue of an RGB triple, in degrees. */
-function hueOf(r, g, b) {
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const delta = max - min;
-  if (!delta) return 0;
-  let hue;
-  if (max === r) hue = ((g - b) / delta) % 6;
-  else if (max === g) hue = (b - r) / delta + 2;
-  else hue = (r - g) / delta + 4;
-  return (hue * 60 + 360) % 360;
 }
 
 // A scratch canvas for reading the collage's colour back off the finished panels.
@@ -187,7 +177,7 @@ function sampleCollage(canvas, w, artH) {
       const sat = (max - min) / 255;
       const lum = (0.2126 * R + 0.7152 * G + 0.0722 * B) / 255;
       if (sat > 0.18 && lum > 0.1) {
-        const bucket = Math.floor(hueOf(R, G, B) / 15) % 24;
+        const bucket = Math.floor(hueOfRgb(R, G, B) / 15) % 24;
         buckets[bucket] += sat * sat * (0.35 + lum);
       }
     }
@@ -282,35 +272,42 @@ function drawTitleBand(ctx, state, geo, w, h, canvas, floating = false) {
     }
   }
 
-  // The type stack, measured from the top of the band down so nothing can overflow it.
-  const pad = bandH * (floating ? 0.08 : 0.06);
-  const kickerSize = Math.max(9, Math.round(bandH * 0.062));
-  const kickerBaseline = bandTop + pad + kickerSize * 0.84;
-  const rule1Y = kickerBaseline + kickerSize * 0.62;
-  const subtitleSize = Math.max(8, Math.round(bandH * 0.052));
+  // The type stack, measured from the top of the band down so nothing can overflow it. The kicker and the subtitle
+  // are sized from the frame's height, not the band's: measured against the band they came out under ten pixels of
+  // cap height once the cover was scaled to 720 tall, which read as a smudge rather than as type. These hold a cap
+  // height of about 1.8% and 2.4% of the frame at any scale, and shrink only if the words would otherwise run off
+  // the band. Kicker small and tracked wide above the wordmark, subtitle larger and tracked below it, both in the
+  // key accent, with a thin accent rule setting each of them off from the title.
+  const pad = bandH * (floating ? 0.08 : 0.055);
+  const kickerText = (state.caption.kicker || '').trim();
+  const subtitleText = (state.caption.subtitle || '').trim();
+  const maxRun = Math.max(1, w - margin * 2);
+  const kickerSize = fitTrackedText(ctx, kickerText, maxRun * 0.7, Math.max(12, Math.round(h * 0.027)), 0.34, 600);
+  const kickerBaseline = bandTop + pad + kickerSize * 0.86;
+  const rule1Y = kickerBaseline + kickerSize * 0.66;
+  const subtitleSize = fitTrackedText(ctx, subtitleText, maxRun, Math.max(12, Math.round(h * 0.032)), 0.3, 500);
   const subtitleBaseline = bandTop + bandH - pad;
-  const rule2Y = subtitleBaseline - subtitleSize * 1.3;
-  const titleTop = rule1Y + bandH * 0.03;
-  const titleBottom = rule2Y - bandH * 0.025;
+  const rule2Y = subtitleBaseline - subtitleSize * 1.34;
+  const titleTop = rule1Y + bandH * 0.028;
+  const titleBottom = rule2Y - bandH * 0.022;
   const available = Math.max(1, titleBottom - titleTop);
 
-  const kickerText = (state.caption.kicker || '').trim();
   if (kickerText) {
-    const run = measureTracked(ctx, kickerText, kickerSize, 0.32, 600);
+    const run = measureTracked(ctx, kickerText, kickerSize, 0.34, 600);
     drawTrackedText(ctx, kickerText, {
       x: w / 2,
       y: kickerBaseline,
       size: kickerSize,
-      tracking: 0.32,
+      tracking: 0.34,
       weight: 600,
-      colour: palette.mid,
+      colour: setAlpha(grade.accent, 0.94),
       shadow: 'rgba(0,0,0,0.55)',
     });
-    const gap = run / 2 + kickerSize * 1.5;
+    const gap = run / 2 + kickerSize * 1.4;
     const ruleY = Math.round(kickerBaseline - kickerSize * 0.34);
-    const thickness = Math.max(1, Math.round(h * 0.0016));
-    hairline(ctx, margin, w / 2 - gap, ruleY, hexToRgba(grade.accent, 0.55), thickness);
-    hairline(ctx, w / 2 + gap, w - margin, ruleY, hexToRgba(grade.accent, 0.55), thickness);
+    const thickness = Math.max(1, Math.round(h * 0.0018));
+    hairline(ctx, margin, w / 2 - gap, ruleY, setAlpha(grade.accent, 0.62), thickness);
+    hairline(ctx, w / 2 + gap, w - margin, ruleY, setAlpha(grade.accent, 0.62), thickness);
   }
 
   // The wordmark: as large as the band allows, on one line if it can stay big, on two if it cannot. It is the
@@ -348,35 +345,40 @@ function drawTitleBand(ctx, state, geo, w, h, canvas, floating = false) {
     });
   });
   ctx.drawImage(wordmark, Math.round(w / 2 - wordmark.width / 2), Math.round(titleCentre - wordmark.height / 2));
-  drawCover.metrics = { size, condense: fitted.condense, lines: fitted.lines, available, titleTop, titleBottom };
 
-  // The second, fainter rule under the title, then the subtitle in a lighter weight.
-  hairline(ctx, margin, w - margin, rule2Y, hexToRgba(grade.accent, 0.22), Math.max(1, Math.round(h * 0.0014)));
+  // What the band ended up with, so a probe (or the editor) can check the type against the frame it sits in.
+  drawCover.metrics = {
+    size,
+    condense: fitted.condense,
+    lines: fitted.lines,
+    available,
+    titleTop,
+    titleBottom,
+    bandTop,
+    bandH,
+    margin,
+    kickerSize,
+    subtitleSize,
+    kickerBaseline,
+    subtitleBaseline,
+    rule1Y,
+    rule2Y,
+  };
 
-  const subtitleText = (state.caption.subtitle || '').trim();
+  // The second, fainter rule under the title, then the subtitle in a lighter weight, larger than the kicker.
+  hairline(ctx, margin, w - margin, rule2Y, setAlpha(grade.accent, 0.42), Math.max(1, Math.round(h * 0.0016)));
+
   if (subtitleText) {
     drawTrackedText(ctx, subtitleText, {
       x: w / 2,
       y: subtitleBaseline,
       size: subtitleSize,
-      tracking: 0.26,
-      weight: 400,
-      colour: hexToRgba(grade.accent, 0.9),
+      tracking: 0.3,
+      weight: 500,
+      colour: setAlpha(grade.accent, 0.96),
       shadow: 'rgba(0,0,0,0.6)',
     });
   }
-}
-
-/** `#rrggbb` to `rgba(...)` with an alpha, so accents can be laid down at any strength. */
-function hexToRgba(hex, alpha) {
-  const value = String(hex ?? '#ffffff').replace('#', '');
-  const full = value.length === 3 ? value.split('').map((ch) => ch + ch).join('') : value;
-  const number = parseInt(full, 16);
-  if (!Number.isFinite(number)) return `rgba(255,255,255,${alpha})`;
-  const r = (number >> 16) & 255;
-  const g = (number >> 8) & 255;
-  const b = number & 255;
-  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 /** A cached tile of monochrome noise, the film grain laid over the finished cover and the band. */
@@ -413,9 +415,13 @@ function grainPattern(ctx, seed) {
 let frameLayer = null;
 let frameLayerKey = '';
 
-/** The frame's atmosphere — corner light, vignette and grain — baked into one overlay bitmap. */
-function frameOverlay(w, h, seed) {
-  const key = `${w}x${h}:${seed}`;
+/**
+ * The frame's atmosphere — the key accent wash, corner light, vignette and grain — baked into one overlay bitmap.
+ * The wash is the unifying pass over the whole canvas: a whisper of the key grade's accent laid over the panels and
+ * the band alike, so every panel is lit by the same lamp even though each was graded on its own.
+ */
+function frameOverlay(w, h, seed, accent) {
+  const key = `${w}x${h}:${seed}:${accent}`;
   if (frameLayer && frameLayerKey === key) return frameLayer;
   if (typeof document === 'undefined') return null;
 
@@ -425,17 +431,28 @@ function frameOverlay(w, h, seed) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
 
-  // A warm light in the top corner and a cool one at the foot, so the frame is not lit evenly.
+  // The unifying wash: the key accent over the whole canvas at low strength. It is a tint you feel rather than see,
+  // and it is the same accent the type and the band are set in.
+  ctx.save();
+  ctx.globalCompositeOperation = 'soft-light';
+  ctx.fillStyle = setAlpha(accent, 0.2);
+  ctx.fillRect(0, 0, w, h);
+  ctx.restore();
+
+  // A warm light in the top corner and a shadow at the foot, both drawn from the key accent, so the frame is not
+  // lit evenly but is still lit by one lamp.
+  const warm = mixColours(accent, '#ffd9ac', 0.55);
+  const shadow = mixColours(accent, '#08050f', 0.72);
   const leak = ctx.createRadialGradient(w * 0.93, h * 0.05, 0, w * 0.93, h * 0.05, Math.max(w, h) * 0.52);
-  leak.addColorStop(0, 'rgba(255,208,150,0.2)');
-  leak.addColorStop(0.5, 'rgba(255,150,90,0.06)');
-  leak.addColorStop(1, 'rgba(255,120,60,0)');
+  leak.addColorStop(0, setAlpha(warm, 0.22));
+  leak.addColorStop(0.5, setAlpha(warm, 0.07));
+  leak.addColorStop(1, setAlpha(warm, 0));
   ctx.fillStyle = leak;
   ctx.fillRect(0, 0, w, h);
 
   const cool = ctx.createRadialGradient(w * 0.08, h * 0.98, 0, w * 0.08, h * 0.98, Math.max(w, h) * 0.46);
-  cool.addColorStop(0, 'rgba(70,180,205,0.14)');
-  cool.addColorStop(1, 'rgba(60,140,200,0)');
+  cool.addColorStop(0, setAlpha(shadow, 0.2));
+  cool.addColorStop(1, setAlpha(shadow, 0));
   ctx.fillStyle = cool;
   ctx.fillRect(0, 0, w, h);
 
@@ -462,8 +479,8 @@ function frameOverlay(w, h, seed) {
 }
 
 /** The last pass: the baked atmosphere, laid over the whole cover in one draw. */
-function drawFrameTreatment(ctx, state, w, h) {
-  const overlay = frameOverlay(w, h, state.seed);
+function drawFrameTreatment(ctx, state, w, h, accent) {
+  const overlay = frameOverlay(w, h, state.seed, accent);
   if (overlay) ctx.drawImage(overlay, 0, 0);
 }
 
@@ -496,7 +513,8 @@ export function drawCover(canvas, state) {
   drawTitleBand(ctx, state, geo, w, h, canvas, state.layout === 'hero');
   flush();
   const t2 = performance.now();
-  drawFrameTreatment(ctx, state, w, h);
+  // The frame is lit in the key grade's accent, the same colour the type is set in.
+  drawFrameTreatment(ctx, state, w, h, primaryGrade(state).accent);
   flush();
   const t3 = performance.now();
   drawCover.timing = { panels: t1 - t0, band: t2 - t1, frame: t3 - t2 };

@@ -54,10 +54,17 @@ export function getLayout(id, w, h) {
   } else if (id === 'hero') {
     panels.push(panel(0, 0, W, H, 11));
   } else {
-    // vice: two narrow columns of two stacked panels around one tall hero panel
-    const sideWidth = Math.round((W - gutter * 2) * 0.285);
+    // vice: two columns of two stacked panels around one tall hero panel.
+    //
+    // The hero used to take 43% of the width and the whole height of the art, which made it close to three times
+    // the area of a side panel: the grid read as a mistake rather than as a hero. The side columns now take 36.7%
+    // of the usable width each and the hero the remaining 26.6%, so the hero is still the only full-height frame
+    // and still the largest, but it is roughly half again the area of a side panel (1.3-1.6x) rather than three
+    // times it. The side stacks split 54/46 so the four supporting frames are not identical either.
+    const usable = W - gutter * 2;
+    const sideWidth = Math.round(usable * 0.367);
     const centreX = sideWidth + gutter;
-    const centreWidth = Math.max(1, W - sideWidth * 2 - gutter * 2);
+    const centreWidth = Math.max(1, usable - sideWidth * 2);
     const rightX = centreX + centreWidth + gutter;
     const splitLeft = Math.round((artH - gutter) * 0.54);
     const splitRight = Math.round((artH - gutter) * 0.46);

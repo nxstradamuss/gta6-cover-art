@@ -7,19 +7,20 @@
 // time it is given a different shot — a wide of the whole scene, a hero of the face with headroom, a close crop at
 // the brow, a detail low on the body, a low angle with air beneath the subject — at a clearly different
 // magnification, centred on a different part of the frame, and mirrored, so two panels of the same person never
-// read as the same crop twice. Grades are assigned so that two touching panels never wear the same one, and the
-// biggest panel (the hero) always takes the most saturated grade. Everything is derived from the state's seeded
-// generator, so a document always plans the same way.
+// read as the same crop twice.
+//
+// Colour is planned as one story, not five: the hero photograph's own dominant hue picks the key grade, and each
+// panel is dealt a member of that grade's narrow family — grades inside 45 degrees of the key's accent, or the key
+// grade itself moved ±12 and ±24 degrees, with heat and depth varying. Two touching panels never wear the same
+// member. Everything is derived from the state's seeded generator, so a document always plans the same way.
 
-import { GRADES } from './grades.js';
+import { gradeFamily, keyGradeForHue } from './grades.js';
 import { getLayout } from './layouts.js';
+import { dominantHue, NEUTRAL_HUE } from './photoHue.js';
 import { makeRandom } from './state.js';
 
 /** The five framings a panel can take. A sixth variant is any of these drawn mirrored (`flip`). */
 export const SHOT_TYPES = ['wide', 'hero', 'close', 'detail', 'low'];
-
-/** The grades the plan chooses between, warmest first. The desaturated grade is the editor's to apply by hand. */
-const AUTO_GRADE_IDS = ['sunset', 'vice', 'gold', 'dusk', 'neon'];
 
 /** A short name for the editor's panel readout. */
 export const SHOT_LABELS = {
@@ -233,42 +234,51 @@ export function planPanels(state) {
       anchorY: spec.anchorY,
       flip,
       gradeIndex: 0,
+      gradeShift: 0,
+      gradeHeat: 1,
+      gradeDepth: 0,
       hero: isHero,
       manual: false,
     };
   }
 
-  // Grades: the hero wears the most saturated one, then every other panel takes a grade none of its neighbours
-  // wear, so no two touching panels are the same colour. The plan draws from the colourful grades in order of
-  // warmth — a poster's panels should read as a sunset, not as a stack of grey cards — and leaves the desaturated
-  // grade to the editor for whoever wants it. Within what the neighbours allow it prefers a grade the poster is
-  // not already wearing, so five panels read as five colours instead of two people in the same light.
-  const heatOrder = GRADES
-    .map((grade, index) => ({ index, heat: Number.isFinite(grade.heat) ? grade.heat : 0.5 }))
-    .sort((a, b) => (b.heat - a.heat) || (a.index - b.index));
-  const autoOrder = AUTO_GRADE_IDS
-    .map((id) => GRADES.findIndex((grade) => grade.id === id))
-    .filter((index) => index >= 0);
-  const assigned = new Array(count).fill(-1);
-  const usage = new Array(GRADES.length).fill(0);
+  // Colour: one grade for the whole cover, chosen so its accent hue sits closest to the hue the hero photograph
+  // already has. Every panel is then dealt a member of that grade's family — the same colour story a few degrees
+  // cooler or warmer, hotter or deeper — so the collage varies in intensity and never in hue family. A member is
+  // only ever repeated where two panels do not touch.
+  const heroPhoto = photoCount ? state.photos[0] : null;
+  const keyGrade = keyGradeForHue(heroPhoto ? dominantHue(heroPhoto.image) : NEUTRAL_HUE);
+  const family = gradeFamily(keyGrade);
+
+  const memberOf = new Array(count).fill(-1);
+  const memberUse = new Array(family.length).fill(0);
   if (count) {
-    assigned[heroIndex] = heatOrder[0].index;
-    usage[assigned[heroIndex]] += 1;
+    memberOf[heroIndex] = 0;
+    memberUse[0] += 1;
   }
 
   for (const { index } of byArea) {
-    if (assigned[index] >= 0) continue;
-    const taken = new Set(neighbours[index].map((other) => assigned[other]).filter((value) => value >= 0));
-    let pool = autoOrder.filter((gradeIndex) => !taken.has(gradeIndex));
-    if (!pool.length) pool = GRADES.map((_, gradeIndex) => gradeIndex).filter((gradeIndex) => !taken.has(gradeIndex));
-    if (!pool.length) pool = [heatOrder[0].index];
-    // The least-worn grades still free, warmest first; one of the two keeps the collage hot without monotony.
-    const fewest = Math.min(...pool.map((gradeIndex) => usage[gradeIndex]));
-    const spread = pool.filter((gradeIndex) => usage[gradeIndex] === fewest);
-    assigned[index] = spread[Math.floor(random() * Math.min(2, spread.length)) % spread.length];
-    usage[assigned[index]] += 1;
+    if (memberOf[index] >= 0) continue;
+    const taken = new Set(neighbours[index].map((other) => memberOf[other]).filter((value) => value >= 0));
+    // The key's own member belongs to the hero, so the other panels draw from the neighbours of the key only.
+    let pool = [];
+    for (let slot = 1; slot < family.length; slot += 1) if (!taken.has(slot)) pool.push(slot);
+    if (!pool.length) pool = [1 + (index % Math.max(1, family.length - 1))];
+    // The least-worn members still free: that keeps one plate hot, one muted and one deep across the collage.
+    const fewest = Math.min(...pool.map((slot) => memberUse[slot]));
+    const spread = pool.filter((slot) => memberUse[slot] === fewest);
+    const pick = spread[Math.floor(random() * spread.length) % spread.length];
+    memberOf[index] = pick;
+    memberUse[pick] += 1;
   }
-  for (let index = 0; index < count; index += 1) panels[index].gradeIndex = Math.max(0, assigned[index]);
+
+  for (let index = 0; index < count; index += 1) {
+    const member = family[Math.max(0, memberOf[index])] ?? family[0];
+    panels[index].gradeIndex = member.gradeIndex;
+    panels[index].gradeShift = member.shift;
+    panels[index].gradeHeat = member.heat;
+    panels[index].gradeDepth = member.depth;
+  }
 
   // Keep a focus the user dragged onto a panel that still shows the same photo.
   for (let index = 0; index < count; index += 1) {

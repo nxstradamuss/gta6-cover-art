@@ -3,7 +3,7 @@
 // the same document always paints the same pixels. The panels' shots are not decided here — shotplan.js owns that —
 // this module only keeps the document and the lists the editor builds its controls from.
 
-import { getGrade, GRADES } from './grades.js';
+import { getGrade, GRADES, makeTone } from './grades.js';
 import { getLayout, LAYOUT_IDS } from './layouts.js';
 
 export const DEFAULT_CAPTION = {
@@ -53,6 +53,9 @@ function blankPanel() {
     anchorY: 0.5,
     flip: false,
     gradeIndex: 0,
+    gradeShift: 0,
+    gradeHeat: 1,
+    gradeDepth: 0,
     hero: false,
     manual: false,
   };
@@ -147,4 +150,18 @@ export function primaryGrade(state) {
 export function panelGrade(state, panel) {
   if (state.grade) return getGrade(state.grade);
   return getGrade(GRADES[(panel?.gradeIndex ?? 0) % GRADES.length]?.id ?? 'sunset');
+}
+
+/**
+ * The tone a panel wears. The plan deals each panel a member of the key grade's family, so the panels differ in hue
+ * by no more than a few degrees and in heat and depth by a good deal. A grade the user has fixed by hand is worn
+ * straight, with no family variation at all.
+ */
+export function panelTone(state, panel) {
+  if (state.grade) return makeTone();
+  return makeTone({
+    shift: panel?.gradeShift ?? 0,
+    heat: panel?.gradeHeat ?? 1,
+    depth: panel?.gradeDepth ?? 0,
+  });
 }
