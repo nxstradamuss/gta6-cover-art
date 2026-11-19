@@ -3,20 +3,70 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Cover Snap</title>
+<meta name="color-scheme" content="dark">
+<title>Vice Cover — photo to GTA-style cover art</title>
 <link rel="stylesheet" href="./style.css">
 </head>
 <body>
 <main class="app">
-  <section class="controls">
-    <h1>Cover Snap</h1>
-    <p>A photo and a caption, made into a square cover.</p>
-    <label>Photo <input id="photo" type="file" accept="image/*"></label>
-    <label>Caption <input id="caption" type="text" maxlength="40" value="Sunset Heist"></label>
-    <button id="export" type="button">Export PNG 1080 x 1080</button>
+  <aside class="panel">
+    <header class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <div>
+        <h1>Vice Cover</h1>
+        <p>Any photo, lettered like a game poster.</p>
+      </div>
+    </header>
+
+    <section class="group">
+      <h2><b>1</b> Photo</h2>
+      <div class="samples">
+        <button class="sample" type="button" data-sample="pier">
+          <img src="samples/pier.jpg" alt="Fisherman on a pier">
+          <span>Pier</span>
+        </button>
+        <button class="sample" type="button" data-sample="boulevard">
+          <img src="samples/boulevard.jpg" alt="Woman by a red convertible">
+          <span>Boulevard</span>
+        </button>
+      </div>
+      <label class="file">Choose your own photos
+        <input id="photo" type="file" accept="image/*" multiple>
+      </label>
+    </section>
+
+    <section class="group">
+      <h2><b>2</b> Layout</h2>
+      <div class="chips" id="layouts"></div>
+    </section>
+
+    <section class="group">
+      <h2><b>3</b> Caption</h2>
+      <input id="caption" type="text" maxlength="32" value="Sunset Heist" aria-label="Title">
+      <div class="row">
+        <input id="kicker" type="text" maxlength="28" value="A Makefun Picture" aria-label="Kicker">
+        <input id="subtitle" type="text" maxlength="28" value="Coming Soon" aria-label="Subtitle">
+      </div>
+    </section>
+
+    <section class="group">
+      <h2><b>4</b> Grade</h2>
+      <div class="chips" id="grades"></div>
+    </section>
+
+    <section class="group">
+      <h2><b>5</b> Size</h2>
+      <div class="chips" id="sizes"></div>
+    </section>
+
+    <button id="export" class="primary" type="button">Export PNG</button>
     <p id="status" role="status"></p>
+    <p class="fineprint">Runs offline. Your photos never leave this machine.</p>
+  </aside>
+
+  <section class="stage">
+    <canvas id="cover" width="1080" height="1080" aria-label="The finished cover"></canvas>
   </section>
-  <canvas id="cover" width="1080" height="1080" aria-label="The cover"></canvas>
 </main>
 <script type="module" src="./src/main.js"></script>
 </body>
