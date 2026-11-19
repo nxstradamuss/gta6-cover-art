@@ -11,10 +11,12 @@
 // subject — at a clearly different magnification, centred on a different part of the frame, and mirrored, so two
 // panels of the same person never read as the same crop twice.
 //
-// Colour is planned as one story, not five: the hero photograph's own dominant hue picks the key grade, and each
-// panel is dealt a member of that grade's narrow family — grades inside 45 degrees of the key's accent, or the key
-// grade itself moved ±12 and ±24 degrees, with heat and depth varying. Two touching panels never wear the same
-// member. Everything is derived from the state's seeded generator, so a document always plans the same way.
+// Colour is planned as one story, not five, and that story is neon: of the two cool grades — `neon` and `vice` —
+// the one whose accent hue sits furthest from the hero photograph's own dominant hue becomes the key, so the grade
+// transforms the photograph instead of blending into it. Each panel is then dealt a member of that grade's narrow
+// family — grades inside 45 degrees of the key's accent, or the key grade itself moved ±12 and ±24 degrees, with
+// heat and depth varying. Two touching panels never wear the same member. Everything is derived from the state's
+// seeded generator, so a document always plans the same way.
 
 import { gradeFamily, keyGradeForHue } from './grades.js';
 import { getLayout } from './layouts.js';
@@ -256,10 +258,11 @@ export function planPanels(state) {
     };
   }
 
-  // Colour: one grade for the whole cover, chosen so its accent hue sits closest to the hue the hero photograph
-  // already has. Every panel is then dealt a member of that grade's family — the same colour story a few degrees
-  // cooler or warmer, hotter or deeper — so the collage varies in intensity and never in hue family. A member is
-  // only ever repeated where two panels do not touch.
+  // Colour: one grade for the whole cover, and it is always one of the two neon grades. The one whose accent hue
+  // sits furthest from the hue the hero photograph already has wins, so the grading carries the picture over to
+  // cyan and magenta rather than agreeing with it. Every panel is then dealt a member of that grade's family — the
+  // same colour story a few degrees cooler or warmer, hotter or deeper — so the collage varies in intensity and
+  // never in hue family. A member is only ever repeated where two panels do not touch.
   const heroPhoto = photoCount ? state.photos[0] : null;
   const keyGrade = keyGradeForHue(heroPhoto ? dominantHue(heroPhoto.image) : NEUTRAL_HUE);
   const family = gradeFamily(keyGrade);

@@ -1,8 +1,9 @@
 // The hue a photograph already has.
 //
-// The key grade of a cover is chosen by matching a grade's accent hue to the hero photograph's own dominant hue,
-// so the grading grows out of the picture instead of being laid over it. The measurement is taken once per image
-// on a 32 x 32 reduction: every cell votes for its hue, weighted by how saturated and how bright it is, because a
+// The key grade of a cover is chosen by comparing the hero photograph's own dominant hue with the accent hues of
+// the two neon grades, and taking the one furthest away, so the grading carries the picture over to cyan and
+// magenta instead of being laid over it in a colour it already had. The measurement is taken once per image on a
+// 32 x 32 reduction: every cell votes for its hue, weighted by how saturated and how bright it is, because a
 // saturated mid-tone is what the eye reads as "the colour" of a frame — a dark corner or a blown highlight is not.
 
 import { hueOfRgb } from './colour.js';

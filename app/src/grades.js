@@ -48,6 +48,111 @@ function clamp01(value) {
 }
 
 /**
+ * A band of light lying across the frame: wide, thin, and brightest in the middle, the smear a row of signs leaves
+ * in the air. It is a radial glow squashed to a fraction of its height, so it reads as a horizontal streak rather
+ * than another round lamp, and it is screened over the photograph so it lights the panel instead of covering it.
+ */
+function bloomBand(ctx, w, h, cx, cy, spread, colour, tone) {
+  const ink = parseColour(colour);
+  const peak = clamp01(ink.a);
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  ctx.globalAlpha = tone.a(1);
+  ctx.translate(w * cx, h * cy);
+  ctx.scale(1, 0.12);
+  const band = ctx.createRadialGradient(0, 0, 0, 0, 0, Math.max(1, w * spread));
+  band.addColorStop(0, tone.c(setAlpha(ink, peak)));
+  band.addColorStop(0.42, tone.c(setAlpha(ink, peak * 0.45)));
+  band.addColorStop(1, tone.c(setAlpha(ink, 0)));
+  ctx.fillStyle = band;
+  ctx.fillRect(-w * 1.5, -h * 12, w * 3, h * 24);
+  ctx.restore();
+}
+
+/**
+ * The two-ink print, as a true gradient map: every pixel's own luminance is looked up in a ramp built from `stops`
+ * — [position, colour] pairs running from the shadow ink through whatever the grade wants in the middle to the
+ * highlight ink — so a dark pixel comes out the shadow colour and a lit pixel the highlight, wherever they sit in
+ * the frame. That is what lets the shadows be cyan and the light pink at the same time; a wash laid over the panel
+ * cannot do it, because a wash has no idea which pixels are dark. `rightStops`, when given, is a second ramp that
+ * the print runs into from the left edge to the right, which is how the vice grade gets pink on one side of the
+ * frame and turquoise on the other while both sides keep the same shadow ink. `gamma` lifts or sinks the middle of
+ * the ramp. The panel bitmap is cached by its caller, so the pixels are walked only when the shot, the crop or the
+ * grade actually changes.
+ */
+function inkMap(ctx, w, h, stops, rightStops, gamma = 1) {
+  const width = Math.max(1, Math.round(w));
+  const height = Math.max(1, Math.round(h));
+  const curve = Math.min(4, Math.max(0.2, gamma));
+
+  // One 256-entry ramp per side, interpolated between that side's stops.
+  const buildRamp = (list) => {
+    const inks = list
+      .map(([at, colour]) => ({ at: clamp01(at), ink: parseColour(colour) }))
+      .sort((first, second) => first.at - second.at);
+    const ramp = new Uint8ClampedArray(256 * 3);
+    if (!inks.length) return ramp;
+    for (let step = 0; step < 256; step += 1) {
+      const t = Math.pow(step / 255, curve);
+      let index = 0;
+      while (index < inks.length - 2 && t > inks[index + 1].at) index += 1;
+      const from = inks[index];
+      const to = inks[Math.min(inks.length - 1, index + 1)];
+      const span = Math.max(1e-6, to.at - from.at);
+      const k = clamp01((t - from.at) / span);
+      ramp[step * 3] = from.ink.r + (to.ink.r - from.ink.r) * k;
+      ramp[step * 3 + 1] = from.ink.g + (to.ink.g - from.ink.g) * k;
+      ramp[step * 3 + 2] = from.ink.b + (to.ink.b - from.ink.b) * k;
+    }
+    return ramp;
+  };
+  const left = buildRamp(stops);
+  const right = rightStops ? buildRamp(rightStops) : left;
+
+  let image = null;
+  try {
+    image = ctx.getImageData(0, 0, width, height);
+  } catch {
+    return; // A canvas the browser will not let us read keeps the photograph as it was drawn.
+  }
+  const { data } = image;
+  const pixels = Math.max(1, data.length / 4);
+
+  // Levels: the picture's own 2nd and 98th percentile of luminance become the ends of the ramp, so a flat or hazy
+  // photograph still reaches both inks. Without this a low-contrast crop sits in the middle of the ramp and the
+  // whole panel comes out one flat violet, which is exactly the wash this grade is trying to get away from.
+  const histogram = new Uint32Array(256);
+  for (let i = 0; i < data.length; i += 4) {
+    histogram[Math.round(0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2])] += 1;
+  }
+  const cut = Math.max(1, Math.round(pixels * 0.02));
+  let low = 0;
+  let high = 255;
+  let seen = 0;
+  for (let step = 0; step < 256; step += 1) {
+    seen += histogram[step];
+    if (seen >= cut) { low = step; break; }
+  }
+  seen = 0;
+  for (let step = 255; step >= 0; step -= 1) {
+    seen += histogram[step];
+    if (seen >= cut) { high = step; break; }
+  }
+  const span = Math.max(8, high - low);
+
+  for (let i = 0; i < data.length; i += 4) {
+    const luminance = 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+    const step = Math.round(Math.pow(clamp01((luminance - low) / span), curve) * 255) * 3;
+    const column = (i / 4) % width;
+    const across = width > 1 ? column / (width - 1) : 0;
+    data[i] = left[step] + (right[step] - left[step]) * across;
+    data[i + 1] = left[step + 1] + (right[step + 1] - left[step + 1]) * across;
+    data[i + 2] = left[step + 2] + (right[step + 2] - left[step + 2]) * across;
+  }
+  ctx.putImageData(image, 0, 0);
+}
+
+/**
  * A tone is how a grade is worn: `shift` moves every hue in the recipe this many degrees, `heat` scales every
  * wash's strength, and `depth` sinks the shadows. `c()` returns the tone's version of a colour, `a()` its version
  * of an alpha. Tones are immutable, so one can be handed round freely.
@@ -107,28 +212,37 @@ function sunset(ctx, w, h, tone) {
   ]), 'multiply', tone.a(1));
 }
 
-// 2. Neon: hot pink light in the highlights, electric cyan down in the shadows.
+// 2. Neon: hot pink light in the highlights, electric cyan down in the shadows, and the streak of a night street's
+// signs lying across the frame at the height of the lamp.
 function neon(ctx, w, h, tone) {
-  duotone(ctx, w, h, linear(ctx, 0, 0, 0, h, [
-    [0, tone.c('#ff2fb4')],
-    [0.4, tone.c('#ff2fb4')],
-    [0.52, tone.c('#7a2cff')],
-    [0.66, tone.c('#00c8ff')],
-    [1, tone.c('#00e5ff')],
-  ]), tone.a(0.5));
-  paint(ctx, w, h, radial(ctx, w * 0.74, h * 0.14, 0, Math.max(w, h) * 0.74, [
-    [0, tone.c('rgba(255,80,214,0.6)')],
+  // The street's light, laid on the photograph first: a hot pink lamp up in the top right where the signs are, and
+  // the bloom those signs smear across the frame. Lighting the plate before it is printed is what keeps the shadows
+  // cyan — a pink glow added after the print would wash its red straight down into them.
+  paint(ctx, w, h, radial(ctx, w * 0.74, h * 0.14, 0, Math.max(w, h) * 0.8, [
+    [0, tone.c('rgba(255,64,208,0.6)')],
+    [0.5, tone.c('rgba(255,40,180,0.2)')],
     [1, tone.c('rgba(255,40,180,0)')],
-  ]), 'screen', tone.a(0.9));
-  paint(ctx, w, h, radial(ctx, w * 0.18, h, 0, Math.max(w, h) * 0.72, [
-    [0, tone.c('rgba(0,226,255,0.5)')],
-    [1, tone.c('rgba(0,180,255,0)')],
-  ]), 'screen', tone.a(0.8));
-  paint(ctx, w, h, linear(ctx, 0, h * 0.5, w, h, [
-    [0, tone.c('rgba(0,0,0,0)')],
-    [0.7, tone.c('rgba(120,60,255,0.16)')],
-    [1, tone.c('rgba(255,90,200,0.3)')],
-  ]), 'color-dodge', tone.a(0.45));
+  ]), 'screen', tone.a(0.95));
+  bloomBand(ctx, w, h, 0.62, 0.2, 0.7, 'rgba(255,110,232,0.32)', tone);
+
+  // The print: two inks keyed to the light now in the plate — deep teal in the shadows, electric cyan through the
+  // lower mids, violet where the inks cross, hot magenta up in the light. Shadows come out cyan and lit skin comes
+  // out pink whatever the photograph was, which is what makes it read as neon instead of as a filter.
+  inkMap(ctx, w, h, [
+    [0, tone.c('#01101c')],
+    [0.26, tone.c('#023a52')],
+    [0.44, tone.c('#0f93c4')],
+    [0.6, tone.c('#6a2ee0')],
+    [0.76, tone.c('#ff2f9e')],
+    [0.9, tone.c('#ff6cc4')],
+    [1, tone.c('#ffc2e6')],
+  ], null, 0.95);
+
+  // The wet street: cyan multiplied into the foot of the print, so the pavement cools without the shadows lifting.
+  paint(ctx, w, h, linear(ctx, 0, h * 0.52, 0, h, [
+    [0, tone.c('rgba(0,130,255,0)')],
+    [1, tone.c('rgba(0,150,255,0.34)')],
+  ]), 'multiply', tone.a(1));
 }
 
 // 3. Dusk: deep violet and indigo, cool and moody.
@@ -176,28 +290,32 @@ function gold(ctx, w, h, tone) {
   ]), 'multiply', tone.a(1));
 }
 
-// 5. Vice: pink from the west, turquoise from the east, a hard split across the frame.
+// 5. Vice: pink from the west, turquoise from the east, a hard split across the frame, and two bloom bands lying
+// where the signs are.
 function vice(ctx, w, h, tone) {
   duotone(ctx, w, h, linear(ctx, 0, 0, w, 0, [
-    [0, tone.c('#ff3d92')],
-    [0.38, tone.c('#ff3d92')],
-    [0.5, tone.c('#c02a8a')],
-    [0.62, tone.c('#00c8cc')],
-    [1, tone.c('#00d8d8')],
-  ]), tone.a(0.5));
+    [0, tone.c('#ff2f8e')],
+    [0.34, tone.c('#ff2f8e')],
+    [0.48, tone.c('#c02ad8')],
+    [0.62, tone.c('#00b6e6')],
+    [1, tone.c('#00ecec')],
+  ]), tone.a(0.64));
   paint(ctx, w, h, linear(ctx, 0, 0, w, h, [
-    [0, tone.c('rgba(255,60,140,0.5)')],
-    [0.48, tone.c('rgba(255,60,140,0)')],
-    [1, tone.c('rgba(0,220,230,0.5)')],
+    [0, tone.c('rgba(255,60,140,0.56)')],
+    [0.46, tone.c('rgba(255,60,140,0)')],
+    [1, tone.c('rgba(0,224,232,0.56)')],
   ]), 'soft-light', tone.a(0.95));
   paint(ctx, w, h, radial(ctx, w * 0.12, h * 0.12, 0, Math.max(w, h) * 0.6, [
-    [0, tone.c('rgba(255,80,150,0.5)')],
+    [0, tone.c('rgba(255,80,150,0.58)')],
     [1, tone.c('rgba(255,60,140,0)')],
   ]), 'screen', tone.a(0.7));
   paint(ctx, w, h, radial(ctx, w, h, 0, Math.max(w, h) * 0.62, [
-    [0, tone.c('rgba(0,226,232,0.42)')],
+    [0, tone.c('rgba(0,226,232,0.5)')],
     [1, tone.c('rgba(0,200,220,0)')],
   ]), 'screen', tone.a(0.65));
+  // Two streaks: the pink of the west side and the turquoise of the east, each at its own height.
+  bloomBand(ctx, w, h, 0.28, 0.16, 0.6, 'rgba(255,86,168,0.46)', tone);
+  bloomBand(ctx, w, h, 0.74, 0.34, 0.56, 'rgba(0,224,236,0.42)', tone);
   paint(ctx, w, h, linear(ctx, 0, 0, 0, h, [
     [0, tone.c('rgba(40,4,50,0.3)')],
     [0.55, tone.c('rgba(0,0,0,0)')],
@@ -245,10 +363,11 @@ export const GRADES = [
     name: 'Neon',
     hint: 'Cyan shadows, hot pink light',
     accent: '#ff4fd8',
-    glow: 'rgba(255,60,200,0.60)',
+    sun: '#4fe4ff',
+    glow: 'rgba(255,70,210,0.62)',
     heat: 1,
-    filter: 'saturate(1.42) contrast(1.12) hue-rotate(-8deg)',
-    palette: { top: '#fff0fb', mid: '#ff7ac8', bottom: '#ff2f9e', outline: '#22002e' },
+    filter: 'saturate(1.56) contrast(1.14) hue-rotate(-6deg)',
+    palette: { top: '#fff0fb', mid: '#ff7ac8', bottom: '#ff2f9e', outline: '#04161f' },
     apply: neon,
   },
   {
@@ -278,10 +397,11 @@ export const GRADES = [
     name: 'Vice',
     hint: 'Pink and turquoise',
     accent: '#ff6fa8',
-    glow: 'rgba(255,90,150,0.60)',
-    heat: 0.94,
-    filter: 'saturate(1.36) contrast(1.08)',
-    palette: { top: '#fff4e2', mid: '#ffb1c9', bottom: '#ff4f92', outline: '#2a0318' },
+    sun: '#6ff0ff',
+    glow: 'rgba(255,90,160,0.62)',
+    heat: 1,
+    filter: 'saturate(1.5) contrast(1.1)',
+    palette: { top: '#fff4e2', mid: '#ffb1c9', bottom: '#ff4f92', outline: '#04161f' },
     apply: vice,
   },
   {
@@ -309,18 +429,26 @@ const AUTO_GRADE_IDS = ['sunset', 'vice', 'gold', 'dusk', 'neon'];
 
 export const AUTO_GRADES = AUTO_GRADE_IDS.map((id) => getGrade(id));
 
+/** The two cool, magenta grades a cover may be keyed in: the neon night, and the vice pink-and-turquoise split. */
+const NEON_GRADE_IDS = ['neon', 'vice'];
+
+export const NEON_GRADES = NEON_GRADE_IDS.map((id) => getGrade(id));
+
 /**
- * The key grade for a cover: of the colourful grades, the one whose accent hue sits closest to `hue` — the hero
- * photograph's own dominant hue. The whole cover is graded in this one grade, so the choice decides the colour
- * story for every panel and for the title band.
+ * The key grade for a cover. A cover is graded neon-first: the candidates are `neon` and `vice`, the two grades
+ * that put cyan in the shadows and magenta in the light, and the one whose accent hue sits *furthest* from `hue` —
+ * the hero photograph's own dominant hue — wins. Taking the far one is what makes the grade a transformation: a
+ * warm amber photograph is carried all the way over to magenta and cyan instead of being nudged a few degrees
+ * toward a grade that was already almost its own colour. The whole cover is graded in this one grade, so the
+ * choice decides the colour story for every panel and for the title band.
  */
 export function keyGradeForHue(hue) {
   const target = Number.isFinite(hue) ? ((hue % 360) + 360) % 360 : 28;
-  let best = AUTO_GRADES[0];
-  let bestGap = Number.POSITIVE_INFINITY;
-  for (const grade of AUTO_GRADES) {
+  let best = NEON_GRADES[0];
+  let bestGap = -1;
+  for (const grade of NEON_GRADES) {
     const gap = hueGap(target, hueOfColour(grade.accent));
-    if (gap < bestGap) {
+    if (gap > bestGap) {
       best = grade;
       bestGap = gap;
     }
@@ -391,12 +519,13 @@ function vignette(ctx, w, h, strength, colour) {
 }
 
 /**
- * The light every panel shares: a warm glow falling from the same point in the frame (so all the prints are lit
- * from the same side and carry the same warmth in their highlights), a multiply wash for the deeper tones, and the
- * one vignette shape. Because the shape never varies, five panels read as one photograph rather than five grades.
+ * The light every panel shares: a glow falling from the same point in the frame (so all the prints are lit from the
+ * same side), a multiply wash for the deeper tones, and the one vignette shape. The glow is the grade's own `sun`
+ * when it names one — the neon grades light the frame with a cool street lamp rather than a warm one — and its
+ * accent otherwise. Because the shape never varies, five panels read as one photograph rather than five grades.
  */
 function sharedLight(ctx, w, h, grade, tone) {
-  const accent = grade.accent;
+  const accent = grade.sun ?? grade.accent;
   paint(ctx, w, h, radial(ctx, w * SUN.x, h * SUN.y, 0, Math.max(w, h) * 0.9, [
     [0, tone.c(setAlpha(accent, 0.2))],
     [0.42, tone.c(setAlpha(accent, 0.08))],
