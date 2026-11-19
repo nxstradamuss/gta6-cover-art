@@ -17,10 +17,13 @@ export function gutterFor(w, h) {
   return Math.min(14, Math.max(6, Math.min(w, h) * 0.009));
 }
 
-/** The title band's height. The hero layout has no band: its title sits over the photograph. */
+/**
+ * The title band's height. It is generous on purpose: the wordmark has to sit in it at poster scale, so the band
+ * takes close to a third of the frame. The hero layout has no band: its title sits over the photograph.
+ */
 function titleBandHeight(id, w, h) {
   if (id === 'hero') return 0;
-  return Math.round(h * (w > h ? 0.28 : 0.27));
+  return Math.round(h * (w > h ? 0.32 : 0.31));
 }
 
 /** Keeps a rectangle sane on very small canvases. */

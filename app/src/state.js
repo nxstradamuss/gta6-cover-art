@@ -1,14 +1,16 @@
 // The cover document. Everything the drawing needs lives here: the loaded photos, the panels that show them, the
 // caption, the layout, the optional global grade and the export size. All variety comes from a seeded generator, so
-// the same document always paints the same pixels.
+// the same document always paints the same pixels. The panels' shots are not decided here — shotplan.js owns that —
+// this module only keeps the document and the lists the editor builds its controls from.
 
-import { GRADES, getGrade } from './grades.js';
+import { getGrade, GRADES } from './grades.js';
 import { getLayout, LAYOUT_IDS } from './layouts.js';
 
 export const DEFAULT_CAPTION = {
   title: 'Sunset Heist',
   subtitle: 'Coming Soon',
-  kicker: 'A Makefun Picture',
+  kicker: 'A Neon Crime Saga',
+  suffix: 'II',
 };
 
 export const DEFAULT_SIZE = { w: 1080, h: 1080 };
@@ -19,10 +21,6 @@ export const SIZES = [
   { id: 'portrait', w: 1080, h: 1350, label: '4:5', hint: '1080 x 1350' },
   { id: 'landscape', w: 1920, h: 1080, label: '16:9', hint: '1920 x 1080' },
 ];
-
-// The grade each panel wears: a warm hero, then a cool panel beside it, so the collage has colour contrast
-// instead of one flat orange wash.
-const PANEL_GRADES = ['sunset', 'dusk', 'gold', 'vice', 'neon', 'noir'];
 
 /** A small deterministic generator (mulberry32). Same seed, same numbers, every run and every machine. */
 export function makeRandom(seed = 1) {
@@ -36,38 +34,34 @@ export function makeRandom(seed = 1) {
   };
 }
 
-function clamp01(value) {
-  return Math.min(1, Math.max(0, value));
-}
-
 /** How many panels a layout asks for at a given size. */
 export function panelCount(layout, size) {
   return getLayout(layout, size.w, size.h).panels.length;
 }
 
-function gradeIndexFor(index) {
-  const id = PANEL_GRADES[index % PANEL_GRADES.length];
-  const found = GRADES.findIndex((grade) => grade.id === id);
-  return found < 0 ? 0 : found;
+/** A panel with no shot decided yet; shotplan.js fills in the photograph, the framing and the grade. */
+function blankPanel() {
+  return {
+    photoIndex: -1,
+    shot: 'wide',
+    zoom: 1,
+    focusX: 0.5,
+    focusY: 0.42,
+    faceX: 0.5,
+    faceY: 0.42,
+    anchorX: 0.5,
+    anchorY: 0.5,
+    flip: false,
+    gradeIndex: 0,
+    hero: false,
+    manual: false,
+  };
 }
 
-/**
- * Grows or trims the panel list to match the layout. New panels take the next photo in the set (so one photo fills
- * every panel, and several photos spread across them) and the next grade in the warm-first cycle.
- */
+/** Grows or trims the panel list to match the layout. The shots themselves are the plan's job. */
 export function syncPanels(state) {
   const wanted = panelCount(state.layout, state.size);
-  while (state.panels.length < wanted) {
-    const index = state.panels.length;
-    const photos = state.photos.length;
-    state.panels.push({
-      photoIndex: photos ? index % photos : -1,
-      focusX: 0.5,
-      focusY: 0.42,
-      zoom: 1,
-      gradeIndex: gradeIndexFor(index),
-    });
-  }
+  while (state.panels.length < wanted) state.panels.push(blankPanel());
   if (state.panels.length > wanted) state.panels.length = wanted;
   return state;
 }
@@ -101,37 +95,22 @@ export function cloneState(state) {
   };
 }
 
-/**
- * Adds a loaded photo. Empty panels take it immediately, so the first photo fills the whole cover and later photos
- * land in the panels still waiting for one.
- */
+// Every photo gets an id of its own, so a panel bitmap can be cached against the exact photo it was cut from.
+let photoSerial = 0;
+
+/** Adds a loaded photo and returns its index. The plan spreads it across the panels on the next draw. */
 export function addPhoto(state, image, name = 'photo', focus = null) {
-  state.photos.push({ image, name, focus });
-  const index = state.photos.length - 1;
-  for (const panel of state.panels) {
-    if (panel.photoIndex < 0) {
-      panel.photoIndex = index;
-      if (focus) {
-        panel.focusX = focus.x;
-        panel.focusY = focus.y;
-      }
-    }
-  }
-  return index;
+  photoSerial += 1;
+  state.photos.push({ id: `p${photoSerial}`, image, name, focus, url: '' });
+  return state.photos.length - 1;
 }
 
-/**
- * Points every panel at a subject found by the saliency pass, with a little seeded jitter and zoom so several
- * panels cut from one photograph read as several shots rather than one image sliced up.
- */
-export function applyFocus(state, focus) {
-  if (!focus) return;
-  const random = makeRandom(state.seed + 37);
-  for (const panel of state.panels) {
-    panel.focusX = clamp01(focus.x + (random() - 0.5) * 0.09);
-    panel.focusY = clamp01(focus.y + (random() - 0.5) * 0.07);
-    panel.zoom = 1 + random() * 0.2;
-  }
+/** Removes a photo; the plan re-spreads the rest across the panels on the next draw. */
+export function removePhoto(state, index) {
+  if (index < 0 || index >= state.photos.length) return state;
+  state.photos.splice(index, 1);
+  for (const panel of state.panels) panel.manual = false;
+  return state;
 }
 
 /** Switches layout, keeping as many photos and grades as the new panel count allows. */
@@ -139,6 +118,7 @@ export function setLayout(state, layout) {
   if (!LAYOUT_IDS.includes(layout)) return state;
   state.layout = layout;
   syncPanels(state);
+  for (const panel of state.panels) panel.manual = false;
   return state;
 }
 
@@ -146,6 +126,7 @@ export function setLayout(state, layout) {
 export function setSize(state, w, h) {
   state.size = { w: Math.round(w), h: Math.round(h) };
   syncPanels(state);
+  for (const panel of state.panels) panel.manual = false;
   return state;
 }
 
@@ -158,8 +139,8 @@ export function setGrade(state, grade) {
 /** The grade the type and the frame borrow their colour from: the override, else the hero panel's. */
 export function primaryGrade(state) {
   if (state.grade) return getGrade(state.grade);
-  const hero = state.panels[0];
-  return getGrade(GRADES[hero?.gradeIndex % GRADES.length]?.id ?? 'sunset');
+  const hero = state.panels.find((panel) => panel.hero) ?? state.panels[0];
+  return getGrade(GRADES[(hero?.gradeIndex ?? 0) % GRADES.length]?.id ?? 'sunset');
 }
 
 /** The grade a panel wears, honouring the global override. */

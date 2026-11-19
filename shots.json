@@ -1,6 +1,26 @@
 [
-  { "name": "1-cover.jpg", "query": "?shot=cover&photo=boulevard&caption=Boulevard%20Queen&layout=vice&size=1920x1080", "w": 1280, "h": 720 },
-  { "name": "2-editor.jpg", "query": "?shot=editor&photo=pier&caption=Sunset%20Heist&layout=vice&size=1080x1080", "w": 1280, "h": 720 },
-  { "name": "3-cover.jpg", "query": "?shot=cover&photo=boulevard&caption=Boulevard%20Queen&layout=triptych&size=1080x1080", "w": 900, "h": 900 },
-  { "name": "4-portrait.jpg", "query": "?shot=cover&photo=pier&caption=Night%20Drive&layout=duo&size=1080x1350&grade=neon", "w": 720, "h": 900 }
+  {
+    "name": "1-cover.jpg",
+    "query": "?shot=cover&photos=boulevard,braids,crown,smoke&caption=Boulevard%20Queen&kicker=A%20Neon%20Crime%20Saga&subtitle=This%20Fall&layout=vice&size=1920x1080",
+    "w": 1280,
+    "h": 720
+  },
+  {
+    "name": "2-editor.jpg",
+    "query": "?shot=editor&photos=boulevard,braids,crown,smoke&caption=Boulevard%20Queen&kicker=A%20Neon%20Crime%20Saga&subtitle=This%20Fall&layout=vice&size=1920x1080",
+    "w": 1280,
+    "h": 720
+  },
+  {
+    "name": "3-cover.jpg",
+    "query": "?shot=cover&photos=crown,smoke&caption=Two%20Ways%20Out&kicker=No%20Rules%20After%20Dark&subtitle=Coming%20Soon&layout=duo&size=1080x1080",
+    "w": 900,
+    "h": 900
+  },
+  {
+    "name": "4-portrait.jpg",
+    "query": "?shot=cover&photos=braids,crown&caption=Last%20Light&kicker=The%20Bay%20Never%20Sleeps&subtitle=Only%20in%20Theatres&layout=triptych&size=1080x1350",
+    "w": 720,
+    "h": 900
+  }
 ]

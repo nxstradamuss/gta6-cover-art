@@ -1,7 +1,8 @@
 // The Vice City colour grades. Each grade is a stack of compositing passes over the photograph already drawn in the
 // panel: a duotone pass in `color` blend mode (which keeps the photograph's light and swaps its hue), then gradients
-// in overlay / soft-light / screen / multiply / color-dodge, plus a saturation pass through ctx.filter where the
-// browser supports it. Every grade closes with a vignette so the eye falls to the middle.
+// in overlay / soft-light / screen / multiply / color-dodge. Every grade closes with a vignette so the eye falls to
+// the middle. The grade's `filter` is applied by the caller as the photograph is drawn, so the saturation and
+// contrast of the source are part of the same single draw instead of a second pass over the pixels.
 
 /** Fills the panel with a paint (a gradient, usually) under a blend mode. */
 function paint(ctx, w, h, style, mode = 'source-over', alpha = 1) {
@@ -49,33 +50,6 @@ function vignette(ctx, w, h, strength = 0.55, tint = '0,0,0') {
   paint(ctx, w, h, gradient);
 }
 
-// A single scratch canvas is reused for the saturation passes: cheaper than allocating one per panel per redraw.
-let scratchCanvas = null;
-
-/**
- * Runs the panel's pixels through a CSS filter (saturate, contrast, sepia, hue-rotate) and draws them back.
- * `origin` is the panel's position on the canvas, since the context is already translated to the panel.
- */
-function filterPass(ctx, w, h, origin, filter) {
-  if (!filter || typeof document === 'undefined') return;
-  try {
-    const width = Math.max(1, Math.round(w));
-    const height = Math.max(1, Math.round(h));
-    if (!scratchCanvas) scratchCanvas = document.createElement('canvas');
-    if (scratchCanvas.width !== width) scratchCanvas.width = width;
-    if (scratchCanvas.height !== height) scratchCanvas.height = height;
-    const scratch = scratchCanvas.getContext('2d');
-    if (!scratch) return;
-    scratch.clearRect(0, 0, width, height);
-    scratch.drawImage(ctx.canvas, origin.x, origin.y, width, height, 0, 0, width, height);
-    ctx.save();
-    ctx.filter = filter;
-    ctx.drawImage(scratchCanvas, 0, 0, w, h);
-    ctx.restore();
-  } catch {
-    // A browser without canvas filters simply gets the gradient layers, which carry the look on their own.
-  }
-}
 
 // 1. Sunset: magenta in the sky, amber climbing out of the horizon, the water left cool so the heat reads hotter.
 function sunset(ctx, w, h) {
@@ -230,7 +204,8 @@ function noir(ctx, w, h) {
 
 /**
  * The named grades. `accent`, `glow` and `palette` are what the lettering and the title band borrow, so a cover's
- * type always belongs to the grade under it.
+ * type always belongs to the grade under it. `heat` is how saturated the grade is, which is what the shot plan
+ * reads when it hands the hero panel the strongest colour.
  */
 export const GRADES = [
   {
@@ -239,8 +214,9 @@ export const GRADES = [
     hint: 'Magenta sky into amber heat',
     accent: '#ff8a3d',
     glow: 'rgba(255,120,40,0.60)',
+    heat: 0.86,
     filter: 'saturate(1.3) contrast(1.06)',
-    palette: { top: '#fff6da', bottom: '#ffa32b', outline: '#2b0710' },
+    palette: { top: '#fff6da', mid: '#ffc247', bottom: '#ff8f1f', outline: '#2b0710' },
     apply: sunset,
   },
   {
@@ -249,8 +225,9 @@ export const GRADES = [
     hint: 'Cyan shadows, hot pink light',
     accent: '#ff4fd8',
     glow: 'rgba(255,60,200,0.60)',
+    heat: 1,
     filter: 'saturate(1.42) contrast(1.12) hue-rotate(-8deg)',
-    palette: { top: '#fff0fb', bottom: '#ff3fae', outline: '#22002e' },
+    palette: { top: '#fff0fb', mid: '#ff7ac8', bottom: '#ff2f9e', outline: '#22002e' },
     apply: neon,
   },
   {
@@ -259,8 +236,9 @@ export const GRADES = [
     hint: 'Violet and indigo',
     accent: '#9b86ff',
     glow: 'rgba(120,90,255,0.55)',
+    heat: 0.62,
     filter: 'saturate(1.08) contrast(1.1) brightness(0.96)',
-    palette: { top: '#f2eeff', bottom: '#7f5cff', outline: '#0d0730' },
+    palette: { top: '#f2eeff', mid: '#b9a6ff', bottom: '#6b46e0', outline: '#0d0730' },
     apply: dusk,
   },
   {
@@ -269,8 +247,9 @@ export const GRADES = [
     hint: 'Honey light, faded blacks',
     accent: '#ffcc55',
     glow: 'rgba(255,190,70,0.55)',
+    heat: 0.78,
     filter: 'sepia(0.24) saturate(1.26) contrast(1.02) brightness(1.05)',
-    palette: { top: '#fffbe6', bottom: '#e3a12a', outline: '#2a1606' },
+    palette: { top: '#fffbe6', mid: '#ffd479', bottom: '#c8861a', outline: '#2a1606' },
     apply: gold,
   },
   {
@@ -279,8 +258,9 @@ export const GRADES = [
     hint: 'Pink and turquoise',
     accent: '#ff6fa8',
     glow: 'rgba(255,90,150,0.60)',
+    heat: 0.94,
     filter: 'saturate(1.36) contrast(1.08)',
-    palette: { top: '#fff4e2', bottom: '#ff5f9e', outline: '#2a0318' },
+    palette: { top: '#fff4e2', mid: '#ffb1c9', bottom: '#ff4f92', outline: '#2a0318' },
     apply: vice,
   },
   {
@@ -289,8 +269,9 @@ export const GRADES = [
     hint: 'Cold, desaturated, heavy',
     accent: '#bcd8ef',
     glow: 'rgba(150,190,225,0.45)',
+    heat: 0.12,
     filter: 'saturate(0.1) contrast(1.26) brightness(1.02)',
-    palette: { top: '#ffffff', bottom: '#a9c2d8', outline: '#04070d' },
+    palette: { top: '#ffffff', mid: '#cfe0f0', bottom: '#93aec6', outline: '#04070d' },
     apply: noir,
   },
 ];
@@ -302,9 +283,8 @@ export function getGrade(id) {
   return GRADES.find((grade) => grade.id === id) ?? GRADES[0];
 }
 
-/** Grades a panel: a saturation pass first, then the gradient layers, then the vignette. */
-export function applyGrade(ctx, w, h, grade, origin) {
+/** Grades a panel that already holds its photograph: the gradient layers, then the vignette. */
+export function applyGrade(ctx, w, h, grade) {
   const chosen = typeof grade === 'string' ? getGrade(grade) : (grade ?? GRADES[0]);
-  if (origin) filterPass(ctx, w, h, origin, chosen.filter);
   chosen.apply(ctx, w, h);
 }

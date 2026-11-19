@@ -1,55 +1,116 @@
-// The title lettering. A heavy condensed display face, drawn glyph by glyph so the tracking, the slight italic
-// lean and the stacked poster treatment (glow, drop shadow, keyline, gradient fill, lit top edge) are all ours.
-// No game font is used or shipped: this is a system face squeezed into a condensed cut.
+// The title lettering. A heavy condensed display face drawn glyph by glyph, so the tracking, the forward lean and
+// every layer of the wordmark are ours: a wide soft glow, a hard offset shadow, two keylines (the thick outer edge
+// and the thinner machined line inside it), a three-stop cream-to-amber fill with a gloss across the top, a lit top
+// edge and a hot bottom edge. The fill is built in a glyph mask so the highlights are clipped to the letters
+// themselves rather than to a rectangle around them.
+//
+// No game font is used or shipped. The face is a system stack squeezed into a condensed cut, with a small numeral
+// set beside the word the way a game logo carries a version.
 
-export const TITLE_STACK = "'Impact', 'Haettenschweiler', 'Arial Narrow Bold', 'Arial Black', 'DejaVu Sans', sans-serif";
+export const TITLE_STACK = "'Impact', 'Haettenschweiler', 'Arial Narrow Bold', 'Arial Black', sans-serif";
 export const BODY_STACK = "'Helvetica Neue', Helvetica, Arial, 'DejaVu Sans', sans-serif";
 
 /** Tight tracking, in ems, so the letters sit shoulder to shoulder. */
-export const TITLE_TRACKING = -0.03;
+export const TITLE_TRACKING = -0.032;
 /** How far the face is squeezed horizontally to read as condensed. */
-export const TITLE_CONDENSE = 0.74;
-/** The italic lean, as a shear on the y axis. */
-const TITLE_SKEW = 0.1;
+export const TITLE_CONDENSE = 0.72;
+/** The forward lean, in degrees; the shear below is its tangent. */
+export const TITLE_LEAN = 8;
 
-const DEFAULT_PALETTE = { top: '#fff6da', bottom: '#ffa32b', outline: '#2b0710' };
+const LEAN_SHEAR = Math.tan((TITLE_LEAN * Math.PI) / 180);
+const SUFFIX_SCALE = 0.38;
+const SUFFIX_GAP = 0.13;
 
+const DEFAULT_PALETTE = { top: '#fff6da', mid: '#ffc247', bottom: '#ff8f1f', outline: '#2b0710' };
+
+/** The wordmark's font, at a given size. */
 export function titleFont(size, weight = 900) {
   return `${weight} ${Math.max(4, Math.round(size))}px ${TITLE_STACK}`;
+}
+
+/** The glow is painted at this fraction of full size and blown back up: a blur is soft, so nobody can tell. */
+const GLOW_SCALE = 0.3;
+
+/** An offscreen canvas that works in a page and in an offscreen context, or null where neither exists. */
+function blankCanvas(width, height) {
+  const w = Math.max(1, Math.ceil(width));
+  const h = Math.max(1, Math.ceil(height));
+  try {
+    if (typeof document !== 'undefined' && document.createElement) {
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      return canvas;
+    }
+    if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h);
+  } catch {
+    // Fall through to the caller's fallback path.
+  }
+  return null;
 }
 
 /** Measures one line of tracked capitals: the per-character widths and the total run. */
 export function measureLine(ctx, text, size, tracking = TITLE_TRACKING) {
   ctx.save();
   ctx.font = titleFont(size);
-  const chars = Array.from(String(text).toUpperCase());
-  const widths = chars.map((ch) => ctx.measureText(ch).width);
+  const chars = Array.from(String(text ?? '').toUpperCase());
+  const widths = chars.map((ch) => (ch === ' ' ? ctx.measureText('M').width * 0.36 : ctx.measureText(ch).width));
   ctx.restore();
   const total = widths.reduce((sum, width) => sum + width, 0) + tracking * size * Math.max(0, chars.length - 1);
   return { chars, widths, width: total };
 }
 
-/** The largest size at which `text` fits `maxWidth` on one line. Never overflows; shrinks in small steps. */
-export function fitTitle(ctx, text, maxWidth, startSize) {
-  const floor = Math.max(8, startSize * 0.16);
-  let size = Math.max(8, startSize);
-  while (size > floor) {
-    const { width } = measureLine(ctx, text, size);
-    if (width * TITLE_CONDENSE <= maxWidth) return Math.floor(size);
-    size *= 0.94;
-  }
-  return Math.floor(floor);
+/** The width the suffix numeral takes, and the gap before it. */
+function suffixWidth(ctx, suffix, size) {
+  if (!suffix) return { width: 0, gap: 0 };
+  ctx.save();
+  ctx.font = titleFont(size * SUFFIX_SCALE, 500);
+  const chars = Array.from(String(suffix).toUpperCase());
+  const width = chars.reduce((sum, ch) => sum + ctx.measureText(ch).width, 0)
+    + size * SUFFIX_SCALE * 0.06 * Math.max(0, chars.length - 1);
+  ctx.restore();
+  return { width, gap: size * SUFFIX_GAP };
 }
 
-/** Greedy word wrap at a given size, so long captions break into two balanced lines instead of shrinking away. */
-export function wrapTitle(ctx, text, maxWidth, size) {
-  const words = String(text).trim().split(/\s+/).filter(Boolean);
-  if (words.length <= 1) return [String(text).trim().toUpperCase()];
+/** The whole wordmark's width in canvas pixels: the condensed word, the gap, then the suffix. */
+export function measureWordmark(ctx, text, size, suffix = '', tracking = TITLE_TRACKING, condense = TITLE_CONDENSE) {
+  const line = measureLine(ctx, text, size, tracking);
+  const tail = suffixWidth(ctx, suffix, size);
+  const run = line.width * condense;
+  return { run, suffix: tail.width * condense, gap: tail.gap * condense, width: run + tail.gap * condense + tail.width * condense };
+}
+
+/** How far the face may be squeezed to fill the band, and how wide it may be set before it stops being condensed. */
+const MIN_CONDENSE = 0.58;
+const MAX_CONDENSE = 0.96;
+/** The block's line height, so the fitted size and the drawn block agree. */
+const LINE_HEIGHT = 0.94;
+
+/**
+ * Fits one line to the band: the size comes from the height, then the horizontal squeeze is chosen so the word
+ * reaches across the band. Only when even the tightest squeeze would overflow does the size come down.
+ */
+function fitLine(ctx, text, maxWidth, maxHeight, suffix, tracking) {
+  const byHeight = Math.max(8, maxHeight / LINE_HEIGHT);
+  const natural = Math.max(1, measureWordmark(ctx, text, byHeight, suffix, tracking, 1).width);
+  let condense = maxWidth / natural;
+  let size = byHeight;
+  if (condense < MIN_CONDENSE) {
+    size = byHeight * (maxWidth / (natural * MIN_CONDENSE));
+    condense = MIN_CONDENSE;
+  }
+  return { size: Math.max(8, Math.floor(size)), condense: Math.min(MAX_CONDENSE, condense) };
+}
+
+/** Greedy word wrap, so a long caption breaks into balanced lines instead of shrinking away. */
+function wrapTitle(ctx, text, maxWidth, size) {
+  const words = String(text ?? '').trim().split(/\s+/).filter(Boolean);
+  if (words.length <= 1) return [String(text ?? '').trim().toUpperCase()];
   const lines = [];
   let line = '';
   for (const word of words) {
     const next = line ? `${line} ${word}` : word;
-    if (line && measureLine(ctx, next, size).width * TITLE_CONDENSE > maxWidth) {
+    if (line && measureWordmark(ctx, next, size, '', TITLE_TRACKING, MIN_CONDENSE).width > maxWidth) {
       lines.push(line);
       line = word;
     } else {
@@ -61,27 +122,189 @@ export function wrapTitle(ctx, text, maxWidth, size) {
 }
 
 /**
- * Chooses the size and the line breaks together: one line if it can stay big, otherwise two lines at a size that
- * still fills the band.
+ * The wordmark's fit for the band: one line if it can stay big, two if it cannot, with the squeeze chosen so the
+ * type reaches the margins. Returns the size, the squeeze and the lines. Never overflows the band.
  */
-export function fitTitleBlock(ctx, text, maxWidth, startSize) {
-  const single = fitTitle(ctx, text, maxWidth, startSize);
-  if (single >= startSize * 0.62) return { size: single, lines: [String(text).toUpperCase()] };
-  const lines = wrapTitle(ctx, text, maxWidth, startSize * 0.82);
-  const size = lines.reduce((smallest, line) => Math.min(smallest, fitTitle(ctx, line, maxWidth, startSize * 0.82)), startSize);
-  return { size, lines };
+export function fitBandTitle(ctx, text, maxWidth, maxHeight, suffix = '', tracking = TITLE_TRACKING) {
+  const one = fitLine(ctx, text, maxWidth, maxHeight, suffix, tracking);
+  if (one.size >= (maxHeight / LINE_HEIGHT) * 0.55) {
+    return { ...one, lines: [String(text ?? '').toUpperCase()] };
+  }
+  const lines = wrapTitle(ctx, text, maxWidth, one.size);
+  let size = Number.POSITIVE_INFINITY;
+  let condense = MAX_CONDENSE;
+  lines.forEach((line, index) => {
+    const fit = fitLine(ctx, line, maxWidth, maxHeight / lines.length, index === lines.length - 1 ? suffix : '', tracking);
+    size = Math.min(size, fit.size);
+    condense = Math.min(condense, fit.condense);
+  });
+  return { size: Math.max(8, Math.floor(size)), condense, lines };
 }
 
-/** Draws one line of the logo, centred on `centerX` with its baseline at `baseline`. */
-function drawLine(ctx, text, centerX, baseline, size, options) {
-  const { tracking, condense, skew, palette, glow } = options;
-  const { chars, widths, width } = measureLine(ctx, text, size, tracking);
-  const run = width * condense;
-  const pad = size;
+/** Runs a drawing callback once per glyph, at its x offset, with the tracking applied. */
+function eachGlyph(chars, widths, size, tracking, draw) {
+  let x = 0;
+  for (let index = 0; index < chars.length; index += 1) {
+    draw(chars[index], x, index);
+    x += widths[index] + tracking * size;
+  }
+}
+
+/**
+ * Builds the letters as a mask and paints the fill inside them: the three-stop gradient, the diagonal gloss over
+ * the top third, the lit top edge and the hot bottom edge. Returns the canvas plus where its baseline sits.
+ */
+function paintGlyphFill(size, chars, widths, tracking, palette) {
+  const pad = Math.ceil(size * 0.24);
+  const total = widths.reduce((sum, width) => sum + width, 0) + tracking * size * Math.max(0, chars.length - 1);
+  const width = total + pad * 2;
+  const height = size * 1.94;
+  const baseline = size * 1.36;
+  const canvas = blankCanvas(width, height);
+  if (!canvas) return null;
+  const mctx = canvas.getContext('2d');
+  if (!mctx) return null;
+
+  mctx.font = titleFont(size);
+  mctx.textAlign = 'left';
+  mctx.textBaseline = 'alphabetic';
+  mctx.fillStyle = '#ffffff';
+  eachGlyph(chars, widths, size, tracking, (ch, x) => mctx.fillText(ch, pad + x, baseline));
+
+  // 5a. The three-stop vertical fill: bright cream at the top, warm gold through the middle, deep amber at the feet.
+  mctx.globalCompositeOperation = 'source-in';
+  const fill = mctx.createLinearGradient(0, baseline - size * 0.8, 0, baseline + size * 0.02);
+  fill.addColorStop(0, palette.top ?? DEFAULT_PALETTE.top);
+  fill.addColorStop(0.15, palette.top ?? DEFAULT_PALETTE.top);
+  fill.addColorStop(0.52, palette.mid ?? palette.bottom ?? DEFAULT_PALETTE.mid);
+  fill.addColorStop(1, palette.bottom ?? DEFAULT_PALETTE.bottom);
+  mctx.fillStyle = fill;
+  mctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // 5b. The gloss: a diagonal sheen that fades out by the middle of the letters, so only their upper third catches it.
+  mctx.globalCompositeOperation = 'source-atop';
+  const gloss = mctx.createLinearGradient(0, baseline - size * 0.82, width * 0.55, baseline - size * 0.06);
+  gloss.addColorStop(0, 'rgba(255,255,255,0.30)');
+  gloss.addColorStop(0.24, 'rgba(255,255,255,0.13)');
+  gloss.addColorStop(0.46, 'rgba(255,255,255,0.02)');
+  gloss.addColorStop(1, 'rgba(255,255,255,0)');
+  mctx.fillStyle = gloss;
+  mctx.fillRect(0, 0, canvas.width, canvas.height);
+
+
+  // 6. The lit top edge: the outline is stroked a few pixels higher, so only the inside of the top edge catches it.
+  mctx.save();
+  mctx.beginPath();
+  mctx.rect(0, 0, canvas.width, baseline - size * 0.06);
+  mctx.clip();
+  mctx.globalCompositeOperation = 'source-atop';
+  mctx.lineJoin = 'round';
+  mctx.lineCap = 'round';
+  mctx.strokeStyle = 'rgba(255,255,255,0.66)';
+  mctx.lineWidth = size * 0.032;
+  eachGlyph(chars, widths, size, tracking, (ch, x) => mctx.strokeText(ch, pad + x, baseline - size * 0.022));
+  mctx.restore();
+
+  // 7. The hot bottom edge: the same trick at the feet of the letters, so they read as extruded, not painted on.
+  mctx.save();
+  mctx.beginPath();
+  mctx.rect(0, baseline - size * 0.1, canvas.width, size * 0.5);
+  mctx.clip();
+  mctx.globalCompositeOperation = 'source-atop';
+  mctx.lineJoin = 'round';
+  mctx.strokeStyle = 'rgba(255,226,164,0.9)';
+  mctx.lineWidth = size * 0.026;
+  eachGlyph(chars, widths, size, tracking, (ch, x) => mctx.strokeText(ch, pad + x, baseline + size * 0.026));
+  mctx.restore();
+
+  return { canvas, baseline, pad, total };
+}
+
+/**
+ * The outer glow, built small and blitted large. A blurred copy of the letters costs a fraction of a shadow pass at
+ * full size, which keeps a redraw inside a single animation frame.
+ */
+function buildGlow(size, chars, widths, tracking, glow) {
+  const pad = Math.ceil(size * 0.26);
+  const total = widths.reduce((sum, width) => sum + width, 0) + tracking * size * Math.max(0, chars.length - 1);
+  const width = total + pad * 2;
+  const height = size * 2.02;
+  const baseline = size * 1.38;
+  const canvas = blankCanvas(width * GLOW_SCALE, height * GLOW_SCALE);
+  if (!canvas) return null;
+  const gctx = canvas.getContext('2d');
+  if (!gctx) return null;
+  gctx.scale(GLOW_SCALE, GLOW_SCALE);
+  gctx.font = titleFont(size);
+  gctx.textAlign = 'left';
+  gctx.textBaseline = 'alphabetic';
+  gctx.shadowColor = glow;
+  gctx.shadowBlur = size * 0.5;
+  gctx.fillStyle = glow;
+  eachGlyph(chars, widths, size, tracking, (ch, x) => gctx.fillText(ch, pad + x, baseline));
+  return { canvas, pad, baseline, width, height };
+}
+
+/** The small numeral beside the word: a lighter weight, raised, keylined so it belongs to the same mark. */
+function drawSuffix(ctx, suffix, x, size, palette) {
+  const suffixSize = size * SUFFIX_SCALE;
+  const chars = Array.from(String(suffix).toUpperCase());
+  if (!chars.length) return 0;
+  const tracking = 0.06;
 
   ctx.save();
-  ctx.translate(centerX - run / 2, baseline);
-  ctx.transform(condense, 0, -skew, 1, 0, 0);
+  ctx.font = titleFont(suffixSize, 500);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.lineJoin = 'round';
+  const widths = chars.map((ch) => ctx.measureText(ch).width);
+  const raise = size * 0.04;
+
+  const stroke = (colour, lineWidth, dy) => {
+    ctx.strokeStyle = colour;
+    ctx.lineWidth = lineWidth;
+    eachGlyph(chars, widths, suffixSize, tracking, (ch, gx) => ctx.strokeText(ch, x + gx, -raise + dy));
+  };
+  const fill = (style, dy) => {
+    ctx.fillStyle = style;
+    eachGlyph(chars, widths, suffixSize, tracking, (ch, gx) => ctx.fillText(ch, x + gx, -raise + dy));
+  };
+
+  // A hard shadow, then the dark keyline the main word wears, then cream, then a thin accent edge.
+  ctx.save();
+  ctx.shadowColor = 'rgba(6,2,8,0.85)';
+  ctx.shadowOffsetX = suffixSize * 0.1;
+  ctx.shadowOffsetY = suffixSize * 0.1;
+  ctx.shadowBlur = 0;
+  fill(palette.outline ?? DEFAULT_PALETTE.outline, 0);
+  ctx.restore();
+
+  stroke(palette.outline ?? DEFAULT_PALETTE.outline, suffixSize * 0.16, 0);
+  const metal = ctx.createLinearGradient(0, -suffixSize * 0.75, 0, suffixSize * 0.05);
+  metal.addColorStop(0, palette.top ?? DEFAULT_PALETTE.top);
+  metal.addColorStop(1, palette.mid ?? DEFAULT_PALETTE.mid);
+  fill(metal, 0);
+  stroke('rgba(255,255,255,0.35)', suffixSize * 0.04, 0);
+
+  ctx.restore();
+  return widths.reduce((sum, width) => sum + width, 0) + tracking * suffixSize * Math.max(0, chars.length - 1);
+}
+
+/**
+ * Draws one line of the wordmark, centred on `centerX` with its baseline at `baseline`.
+ * Returns the line's drawn width and height.
+ */
+function drawWordmarkLine(ctx, text, centerX, baseline, size, options) {
+  const { tracking, condense, palette, glow, suffix } = options;
+  const { chars, widths, width } = measureLine(ctx, text, size, tracking);
+  const run = width * condense;
+  const tail = suffixWidth(ctx, suffix, size);
+  const totalWidth = run + tail.gap * condense + tail.width * condense;
+
+  ctx.save();
+  ctx.translate(centerX - totalWidth / 2, baseline);
+  // 8. The forward lean and the condensed cut, applied once to the whole word.
+  ctx.transform(condense, 0, -LEAN_SHEAR, 1, 0, 0);
   ctx.font = titleFont(size);
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
@@ -89,70 +312,66 @@ function drawLine(ctx, text, centerX, baseline, size, options) {
   ctx.lineCap = 'round';
   ctx.miterLimit = 2;
 
-  const eachGlyph = (draw) => {
-    let x = 0;
-    for (let i = 0; i < chars.length; i += 1) {
-      draw(chars[i], x);
-      x += widths[i] + tracking * size;
-    }
-  };
+  // 1. A wide, faint outer glow in the grade's accent colour, painted small and blown up behind everything else.
+  const glowLayer = buildGlow(size, chars, widths, tracking, glow);
+  if (glowLayer) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = 0.8;
+    ctx.drawImage(glowLayer.canvas, -glowLayer.pad, -glowLayer.baseline, glowLayer.width, glowLayer.height);
+    ctx.restore();
+  } else {
+    ctx.save();
+    ctx.shadowColor = glow;
+    ctx.shadowBlur = size * 0.5;
+    ctx.fillStyle = glow;
+    eachGlyph(chars, widths, size, tracking, (ch, x) => ctx.fillText(ch, x, 0));
+    ctx.restore();
+  }
 
-  // 1. Outer glow in the grade's accent colour, laid down first so it sits behind everything else.
+  // 2. The hard drop shadow: no blur, down and to the right by about 4% of the letter height.
   ctx.save();
-  ctx.shadowColor = glow;
-  ctx.shadowBlur = size * 0.62;
-  ctx.fillStyle = glow;
-  eachGlyph((ch, x) => ctx.fillText(ch, x, 0));
+  ctx.shadowColor = 'rgba(5,1,7,0.9)';
+  ctx.shadowOffsetX = size * 0.04;
+  ctx.shadowOffsetY = size * 0.045;
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#0a0410';
+  eachGlyph(chars, widths, size, tracking, (ch, x) => ctx.fillText(ch, x, 0));
   ctx.restore();
 
-  // 2. Heavy drop shadow, offset down and right, with the dark body it belongs to.
-  ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.55)';
-  ctx.shadowOffsetX = size * 0.05;
-  ctx.shadowOffsetY = size * 0.075;
-  ctx.shadowBlur = size * 0.1;
-  ctx.fillStyle = '#0d0510';
-  eachGlyph((ch, x) => ctx.fillText(ch, x, 0));
-  ctx.restore();
+  // 3. The thick outer keyline: dark warm brown, never black, with round joins so the corners stay soft.
+  ctx.strokeStyle = palette.outline ?? DEFAULT_PALETTE.outline;
+  ctx.lineWidth = size * 0.09;
+  eachGlyph(chars, widths, size, tracking, (ch, x) => ctx.strokeText(ch, x, 0));
 
-  // 3. Thick keyline: a near-black outer edge, then the grade-tinted inner edge.
-  ctx.strokeStyle = '#070309';
-  ctx.lineWidth = size * 0.15;
-  eachGlyph((ch, x) => ctx.strokeText(ch, x, 0));
-  ctx.strokeStyle = palette.outline;
-  ctx.lineWidth = size * 0.085;
-  eachGlyph((ch, x) => ctx.strokeText(ch, x, 0));
+  // 4. The second keyline just inside it, half the width: this is what makes the lettering look machined.
+  ctx.strokeStyle = palette.mid ?? DEFAULT_PALETTE.mid;
+  ctx.lineWidth = size * 0.045;
+  ctx.globalAlpha = 0.55;
+  eachGlyph(chars, widths, size, tracking, (ch, x) => ctx.strokeText(ch, x, 0));
+  ctx.globalAlpha = 1;
 
-  // 4. The fill: cream at the top of the letters into the hot colour at their feet.
-  const fill = ctx.createLinearGradient(0, -size * 0.76, 0, size * 0.18);
-  fill.addColorStop(0, palette.top);
-  fill.addColorStop(0.5, palette.top);
-  fill.addColorStop(1, palette.bottom);
-  ctx.fillStyle = fill;
-  eachGlyph((ch, x) => ctx.fillText(ch, x, 0));
+  // 5-7. The fill, the gloss, the lit top edge and the hot bottom edge, clipped to the letters themselves.
+  const mask = paintGlyphFill(size, chars, widths, tracking, palette);
+  if (mask) {
+    ctx.drawImage(mask.canvas, -mask.pad, -mask.baseline);
+  } else {
+    // No offscreen canvas: a plain gradient fill still keeps the wordmark readable.
+    const fill = ctx.createLinearGradient(0, -size * 0.8, 0, 0);
+    fill.addColorStop(0, palette.top ?? DEFAULT_PALETTE.top);
+    fill.addColorStop(0.15, palette.top ?? DEFAULT_PALETTE.top);
+    fill.addColorStop(0.52, palette.mid ?? DEFAULT_PALETTE.mid);
+    fill.addColorStop(1, palette.bottom ?? DEFAULT_PALETTE.bottom);
+    ctx.fillStyle = fill;
+    eachGlyph(chars, widths, size, tracking, (ch, x) => ctx.fillText(ch, x, 0));
+  }
 
-  // 5. A thin bright highlight along the lit top edge, clipped to the upper half of the letters.
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(-pad, -size * 1.06, width + pad * 2, size * 0.66);
-  ctx.clip();
-  ctx.strokeStyle = 'rgba(255,255,255,0.72)';
-  ctx.lineWidth = size * 0.03;
-  eachGlyph((ch, x) => ctx.strokeText(ch, x, 0));
-  ctx.restore();
-
-  // 6. A dark inner shadow along the bottom edge, so the letters read as cut metal rather than flat paint.
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(-pad, -size * 0.16, width + pad * 2, size * 0.42);
-  ctx.clip();
-  ctx.strokeStyle = 'rgba(40,0,20,0.32)';
-  ctx.lineWidth = size * 0.028;
-  eachGlyph((ch, x) => ctx.strokeText(ch, x, 0));
-  ctx.restore();
+  // The numeral, set smaller and raised beside the word, sharing the baseline and the lean. It is placed in the
+  // un-condensed glyph space the transform works in, so it lands right after the last letter.
+  if (suffix) drawSuffix(ctx, suffix, width + tail.gap, size, palette);
 
   ctx.restore();
-  return { width: run, height: size };
+  return { width: totalWidth, height: size };
 }
 
 /**
@@ -163,10 +382,10 @@ export function drawTitle(ctx, text, opts = {}) {
   const size = Math.max(8, opts.size ?? 120);
   const tracking = opts.tracking ?? TITLE_TRACKING;
   const condense = opts.condense ?? TITLE_CONDENSE;
-  const skew = opts.skew ?? TITLE_SKEW;
-  const lineHeight = opts.lineHeight ?? 0.95;
+  const lineHeight = opts.lineHeight ?? 0.94;
   const palette = opts.palette ?? DEFAULT_PALETTE;
   const glow = opts.glow ?? 'rgba(255,120,40,0.55)';
+  const suffix = (opts.suffix ?? '').trim();
   const x = opts.x ?? 0;
   const y = opts.y ?? 0;
 
@@ -175,16 +394,25 @@ export function drawTitle(ctx, text, opts = {}) {
     .filter(Boolean);
   if (!lines.length) return { width: 0, height: 0, size, lines: [] };
 
-  const widest = lines.reduce((max, line) => Math.max(max, measureLine(ctx, line, size, tracking).width), 0);
+  const widest = lines.reduce((max, line, index) => Math.max(
+    max,
+    measureWordmark(ctx, line, size, index === lines.length - 1 ? suffix : '', tracking, condense).width,
+  ), 0);
   const blockHeight = size * lineHeight * lines.length;
   const top = y - blockHeight / 2;
 
   lines.forEach((line, index) => {
     const baseline = top + size * lineHeight * (index + 0.5) + size * 0.34;
-    drawLine(ctx, line, x, baseline, size, { tracking, condense, skew, palette, glow });
+    drawWordmarkLine(ctx, line, x, baseline, size, {
+      tracking,
+      condense,
+      palette,
+      glow,
+      suffix: index === lines.length - 1 ? suffix : '',
+    });
   });
 
-  return { width: widest * condense, height: blockHeight, size, lines };
+  return { width: widest, height: blockHeight, size, lines };
 }
 
 /**
@@ -216,9 +444,9 @@ export function drawTrackedText(ctx, text, opts = {}) {
     ctx.shadowColor = opts.shadow;
     ctx.shadowBlur = size * 0.8;
   }
-  for (let i = 0; i < chars.length; i += 1) {
-    ctx.fillText(chars[i], cursor, y);
-    cursor += widths[i] + tracking * size;
+  for (let index = 0; index < chars.length; index += 1) {
+    ctx.fillText(chars[index], cursor, y);
+    cursor += widths[index] + tracking * size;
   }
   ctx.restore();
   return run;
